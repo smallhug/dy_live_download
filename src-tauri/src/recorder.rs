@@ -1,0 +1,337 @@
+use chrono::Local;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::Path;
+use std::process::Stdio;
+use std::sync::{Arc, LazyLock};
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::{Child, Command};
+use tokio::sync::Mutex;
+use tauri::{AppHandle, Emitter};
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RecordProgress {
+    pub room_id: String,
+    pub time: String,      // 格式：00:01:23
+    pub size: String,      // 格式：25.4 MB
+    pub bitrate: String,   // 格式：1500 kb/s
+    pub status: String,    // "recording" | "stopped" | "error"
+    pub error_msg: Option<String>,
+}
+
+pub struct RecordTask {
+    pub room_id: String,
+    pub anchor_name: String,
+    pub child: Child,
+    pub start_time: String,
+}
+
+// 全局录制状态管理器
+pub struct RecorderState {
+    pub tasks: Arc<Mutex<HashMap<String, RecordTask>>>,
+}
+
+impl RecorderState {
+    pub fn new() -> Self {
+        Self {
+            tasks: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+}
+
+static RE_PROGRESS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"size=\s*([0-9a-zA-Z\.]+)\s+time=\s*([0-9:\.]+)\s+bitrate=\s*([0-9\.]+[a-zA-Z\/]+)").unwrap());
+static RE_ERROR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)(error|failed|invalid|permission denied|connection refused|timeout|no such file|404|403|502|503)").unwrap());
+
+// 启动录制任务
+pub async fn start_recording(
+    app: AppHandle,
+    state: tauri::State<'_, RecorderState>,
+    room_id: String,
+    anchor_name: String,
+    stream_url: String,
+    ffmpeg_path: String,
+    save_dir: String,
+    segment_duration_mins: u64,
+    user_agent: String,  // 新增：用户配置的 UA
+) -> Result<(), String> {
+    let mut tasks = state.tasks.lock().await;
+    if tasks.contains_key(&room_id) {
+        return Err("该直播间已经在录制中".to_string());
+    }
+
+    // 检查 ffmpeg 是否有效
+    let ffmpeg_exe = if ffmpeg_path.is_empty() {
+        "ffmpeg".to_string()
+    } else {
+        ffmpeg_path.clone()
+    };
+
+    // 创建保存目录
+    let save_path = Path::new(&save_dir);
+    if !save_path.exists() {
+        std::fs::create_dir_all(save_path)
+            .map_err(|e| format!("创建保存目录失败: {}", e))?;
+    }
+
+    let time_str = Local::now().format("%Y%m%d_%H%M%S").to_string();
+    let safe_anchor_name = anchor_name.replace(|c: char| !c.is_alphanumeric() && c != '_', "");
+
+    // 根据输入流 URL 自动判断输出格式
+    // FLV 直接推流 → 保存为 .flv（避免 FLV 封装到 MP4 的兼容性问题）
+    // M3U8/HLS 流 → 保存为 .mp4
+    let is_flv_stream = stream_url.contains(".flv") || stream_url.starts_with("rtmp");
+    let ext = if is_flv_stream { "flv" } else { "mp4" };
+
+    // 组装 FFmpeg 参数（精简版：只使用最通用、最稳定的参数）
+    // 注意：FFmpeg 参数顺序必须是：[全局选项] -> [输入选项] -> -i URL -> [输出选项] -> 输出文件
+    let mut args = vec![
+        "-y".to_string(),                           // [全局] 覆盖输出文件
+        "-protocol_whitelist".to_string(),           // [全局] 允许的协议
+        "file,http,https,tcp,tls,crypto".to_string(),
+        // 以下为输入选项（必须在 -i 之前）
+        "-headers".to_string(),                     // [输入] HTTP 请求头
+        format!("User-Agent: {}\r\nReferer: https://live.douyin.com/\r\n", if user_agent.trim().is_empty() {
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0"
+        } else {
+            &user_agent
+        }),
+        // 输入源
+        "-i".to_string(),                          // 输入URL标记
+        stream_url,
+        // 以下为输出选项
+        "-c".to_string(),                          // [输出] 编码器
+        "copy".to_string(),                        // 无损拷贝（不重新编码）
+    ];
+
+    // 配置分段
+    if segment_duration_mins > 0 {
+        let segment_secs = segment_duration_mins * 60;
+        let file_pattern = save_path
+            .join(format!("{}_{}_%03d.{}", safe_anchor_name, time_str, ext))
+            .to_string_lossy()
+            .to_string();
+        // 注意：-f segment 分段器不支持 -movflags +faststart，必须省略
+        args.extend(vec![
+            "-f".to_string(),
+            "segment".to_string(),
+            "-segment_time".to_string(),
+            segment_secs.to_string(),
+            "-reset_timestamps".to_string(),
+            "1".to_string(),
+            file_pattern,
+        ]);
+    } else {
+        // 单文件模式：如果是 MP4 则加入 faststart，FLV 不需要
+        if !is_flv_stream {
+            args.extend(vec![
+                "-movflags".to_string(),
+                "+faststart".to_string(),
+            ]);
+        }
+        let file_path = save_path
+            .join(format!("{}_{}.{}", safe_anchor_name, time_str, ext))
+            .to_string_lossy()
+            .to_string();
+        args.push(file_path);
+    }
+
+    // 启动进程
+    println!("[FFmpeg] 准备启动 FFmpeg 进程...");
+    println!("[FFmpeg] 可执行文件: {}", ffmpeg_exe);
+    println!("[FFmpeg] 完整参数列表 (共{}个):", args.len());
+    for (idx, arg) in args.iter().enumerate() {
+        // 隐藏敏感信息（URL 和 User-Agent）
+        if arg.contains("http") || arg.contains("User-Agent") {
+            let display = if arg.len() > 60 { format!("{}...", &arg[..60]) } else { arg.clone() };
+            println!("[FFmpeg]   [{}] {} (已截断)", idx, display);
+        } else {
+            println!("[FFmpeg]   [{}] {}", idx, arg);
+        }
+    }
+
+    let mut cmd = Command::new(&ffmpeg_exe);
+    cmd.args(&args)
+       .stdout(Stdio::null())
+       .stdin(Stdio::piped())
+       .stderr(Stdio::piped());
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    match cmd.spawn() {
+        Ok(mut child) => {
+            println!("[FFmpeg] ✅ FFmpeg 进程启动成功! PID: {:?}", child.id());
+            
+            let stderr = child.stderr.take().ok_or_else(|| "无法获取 FFmpeg stderr 流".to_string())?;
+            
+            // 存入任务列表
+            let task = RecordTask {
+                room_id: room_id.clone(),
+                anchor_name: anchor_name.clone(),
+                child,
+                start_time: Local::now().to_rfc3339(),
+            };
+            tasks.insert(room_id.clone(), task);
+            
+            // 启动异步任务监控进度（必须在 Ok 分支内）
+            let room_id_clone = room_id.clone();
+            let tasks_clone = state.tasks.clone();
+            let app_clone = app.clone();
+
+            tauri::async_runtime::spawn(async move {
+                let mut reader = BufReader::new(stderr).lines();
+                
+                println!("[FFmpeg] 📡 开始监控 FFmpeg 输出 (PID: {})", room_id_clone);
+                let mut line_count = 0u64;
+
+                // 默认状态通知
+                let _ = app_clone.emit(
+                    "record-progress",
+                    RecordProgress {
+                        room_id: room_id_clone.clone(),
+                        time: "00:00:00".to_string(),
+                        size: "0 B".to_string(),
+                        bitrate: "0 kb/s".to_string(),
+                        status: "recording".to_string(),
+                        error_msg: None,
+                    },
+                );
+
+                while let Ok(Some(line)) = reader.next_line().await {
+                    line_count += 1;
+                    
+                    // 打印前 20 行和所有错误/警告行到终端
+                    if line_count <= 20 || RE_ERROR.is_match(&line) || line.contains("Warning") || line.contains("warning") {
+                        println!("[FFmpeg STDERR] [L{}] {}", line_count, 
+                            if line.len() > 150 { format!("{}...", &line[..150]) } else { line.clone() }
+                        );
+                    }
+                    
+                    // 检测是否包含错误信息
+                    if RE_ERROR.is_match(&line) {
+                        eprintln!("[FFmpeg ❌ ERROR] [L{}] {}", line_count, line);
+                        
+                        // 发送错误事件给前端
+                        let _ = app_clone.emit(
+                            "record-progress",
+                            RecordProgress {
+                                room_id: room_id_clone.clone(),
+                                time: "00:00:00".to_string(),
+                                size: "0 B".to_string(),
+                                bitrate: "0 kb/s".to_string(),
+                                status: "error".to_string(),
+                                error_msg: Some(format!("FFmpeg Error: {}", 
+                                    if line.len() > 200 { &line[..200] } else { &line }
+                                )),
+                            },
+                        );
+                    }
+                    
+                    // 解析进度信息
+                    if let Some(caps) = RE_PROGRESS.captures(&line) {
+                        let size = caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+                        let time = caps.get(2).map(|m| m.as_str().to_string()).unwrap_or_default();
+                        // 截取 time 前面的毫秒点，例如 00:00:37.48 -> 00:00:37
+                        let clean_time = if let Some(idx) = time.find('.') {
+                            time[..idx].to_string()
+                        } else {
+                            time
+                        };
+
+                        let bitrate = caps.get(3).map(|m| m.as_str().to_string()).unwrap_or_default();
+                        
+                        // 每 10 行进度打印一次日志（避免刷屏）
+                        if line_count % 10 == 0 {
+                            println!("[FFmpeg ⏱️ 进度] {} | {} | {} (已读取{}行)", clean_time, size, bitrate, line_count);
+                        }
+
+                        let _ = app_clone.emit(
+                            "record-progress",
+                            RecordProgress {
+                                room_id: room_id_clone.clone(),
+                                time: clean_time,
+                                size,
+                                bitrate,
+                                status: "recording".to_string(),
+                                error_msg: None,
+                            },
+                        );
+                    }
+                }
+                
+                // stderr 流关闭（FFmpeg 进程退出）
+                println!("[FFmpeg] 📡 stderr 流已关闭 (共读取{}行)，等待进程完全退出...", line_count);
+
+                // ffmpeg 结束后的清理
+                // 1. 锁的粒度被降到最低：在独立作用域中移除任务，之后锁会被立即释放
+                let removed_task = {
+                    let mut lock = tasks_clone.lock().await;
+                    lock.remove(&room_id_clone)
+                };
+
+                // 2. 在没有锁的情况下，安全地 await 等待子进程退出
+                if let Some(mut task) = removed_task {
+                    let status = match task.child.wait().await {
+                        Ok(status) if status.success() => "stopped".to_string(),
+                        Ok(_) => "stopped".to_string(),
+                        Err(_) => "error".to_string(),
+                    };
+
+                    let _ = app_clone.emit(
+                        "record-progress",
+                        RecordProgress {
+                            room_id: room_id_clone.clone(),
+                            time: "00:00:00".to_string(),
+                            size: "0 B".to_string(),
+                            bitrate: "0 kb/s".to_string(),
+                            status,
+                            error_msg: None,
+                        },
+                    );
+                }
+            });
+
+            return Ok(());
+        }
+        Err(e) => {
+            let err_msg = format!("❌ 启动 FFmpeg 失败!\n   可执行文件: {}\n   错误原因: {}\n   请检查:\n   1. FFmpeg 路径是否正确\n   2. 文件是否存在\n   3. 是否有执行权限", ffmpeg_exe, e);
+            println!("{}", err_msg);
+            return Err(err_msg);
+        }
+    }
+}
+
+// 停止录制
+pub async fn stop_recording(
+    state: tauri::State<'_, RecorderState>,
+    room_id: &str,
+) -> Result<(), String> {
+    // 1. 获取锁，提取出 child 的 stdin 并写入 'q' 优雅退出
+    let mut tasks = state.tasks.lock().await;
+    if let Some(task) = tasks.get_mut(room_id) {
+        if let Some(mut stdin) = task.child.stdin.take() {
+            use tokio::io::AsyncWriteExt;
+            // 写入 'q' 字符
+            let _ = stdin.write_all(b"q").await;
+            let _ = stdin.flush().await;
+        } else {
+            // 如果 stdin 不可用，尝试强杀
+            let _ = task.child.kill().await;
+        }
+        Ok(())
+    } else {
+        Err("该直播间未在录制中".to_string())
+    }
+}
+
+// 获取当前所有正在录制的房间ID
+pub async fn get_active_recordings(
+    state: tauri::State<'_, RecorderState>,
+) -> Vec<String> {
+    let tasks = state.tasks.lock().await;
+    tasks.keys().cloned().collect()
+}
