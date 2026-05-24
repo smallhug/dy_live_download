@@ -99,17 +99,15 @@ body {
 }
 
 .logo-indicator {
-  width: 14px;
-  height: 14px;
-  border-radius: 4.5px;
-  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
-  position: relative;
-  box-shadow: 0 0 10px rgba(79, 70, 229, 0.35);
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  object-fit: contain;
   transition: transform 0.25s ease;
 }
 
 .app-sidebar:hover .logo-indicator {
-  transform: scale(1.1) rotate(45deg);
+  transform: scale(1.1);
 }
 
 /* 导航项目列表 */

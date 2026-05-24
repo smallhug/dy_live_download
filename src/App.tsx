@@ -321,7 +321,7 @@ function App() {
       <div className="app-sidebar-wrapper">
         <aside className="app-sidebar">
           <div className="sidebar-logo">
-            <div className="logo-indicator"></div>
+            <img src="/icon.png" alt="Logo" className="logo-indicator" />
           </div>
           <nav className="sidebar-nav">
             <button 
