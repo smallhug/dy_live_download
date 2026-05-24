@@ -23,7 +23,9 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
 
   useEffect(() => {
     if (isOpen && room) {
-      setQuality(room.preferred_quality || "原画");
+      const q = room.preferred_quality || "";
+      const mapped = q === "原画" ? "origin" : q === "蓝光" ? "blue_ray" : q === "超清" ? "uhd" : q === "高清" ? "hd" : q === "标清" ? "sd" : q || "origin";
+      setQuality(mapped);
       setSegmentMins(room.segment_duration_mins || 0);
       setIsMonitoring(room.is_monitoring ?? false);
       setAutoRecord(room.auto_record ?? true);
@@ -45,7 +47,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
       });
       onClose();
     } catch (err) {
-      alert("保存设置失败: " + err);
+      // 错误已由父组件处理
     } finally {
       setIsSaving(false);
     }
@@ -90,11 +92,11 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                   outline: "none",
                 }}
               >
-                <option value="原画">原画</option>
-                <option value="蓝光">蓝光</option>
-                <option value="超清">超清</option>
-                <option value="高清">高清</option>
-                <option value="标清">标清</option>
+                <option value="origin">原画</option>
+                <option value="blue_ray">蓝光</option>
+                <option value="uhd">超清</option>
+                <option value="hd">高清</option>
+                <option value="sd">标清</option>
               </select>
             </div>
             <div className="form-group" style={{ flex: 1 }}>

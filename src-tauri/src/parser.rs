@@ -5,8 +5,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::form_urlencoded;
 
-static RE_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"live\.douyin\.com/([0-9a-zA-Z_]+)").unwrap());
-static RE_CLEAN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[0-9a-zA-Z_]+$").unwrap());
 static RE_PACE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"self\.__pace_f\.push\(\[\s*\d+\s*,\s*"(.*?)"\s*\]\)"#).unwrap());
 static RE_RENDER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<script\s+id="RENDER_DATA"\s+type="application/json">([^<]+)</script>"#).unwrap());
 static RE_TITLE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<title>([^<]+)</title>").unwrap());
@@ -69,26 +67,18 @@ pub async fn parse_douyin_live(
     user_agent: &str,
     sec_ch_ua: &str,
 ) -> Result<LiveRoomInfo, String> {
-    // 兼容处理：如果输入的是纯 ID（仅包含数字、字母、下划线），则自动拼接为完整 URL
-    // 否则，从 URL 中解析出 ID
-    let (actual_url, room_id) = if room_url.contains("live.douyin.com/") {
-        let id = RE_ID
-            .captures(room_url)
-            .and_then(|cap| cap.get(1))
-            .map(|m| m.as_str().to_string())
-            .ok_or_else(|| "无法从 URL 中解析出直播间 ID，请确认链接格式。".to_string())?;
-        (room_url.to_string(), id)
-    } else {
-        let clean_id = room_url.trim().to_string();
-        if clean_id.is_empty() {
-            return Err("直播间链接或 ID 不能为空".to_string());
-        }
-        if RE_CLEAN.is_match(&clean_id) {
-            (format!("https://live.douyin.com/{}", clean_id), clean_id)
-        } else {
-            return Err("输入格式不正确，请输入抖音直播间链接或合法的数字 ID。".to_string());
-        }
-    };
+    let clean_id = room_url.trim().to_string();
+    if clean_id.is_empty() {
+        return Err("直播间数字 ID 不能为空".to_string());
+    }
+
+    // 仅支持纯数字 ID 校验
+    if !clean_id.chars().all(|c| c.is_ascii_digit()) {
+        return Err("输入格式不正确，仅支持输入抖音直播间的纯数字 ID，请勿粘贴链接。".to_string());
+    }
+
+    let room_id = clean_id.clone();
+    let actual_url = format!("https://live.douyin.com/{}", room_id);
 
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7".parse().unwrap());
@@ -119,7 +109,7 @@ pub async fn parse_douyin_live(
     let client = reqwest::Client::builder()
         .user_agent(actual_ua)
         .default_headers(headers)
-        .timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(15))
         .build()
         .map_err(|e| format!("构建HTTP客户端失败: {}", e))?;
 
@@ -307,6 +297,38 @@ pub async fn parse_douyin_live(
         is_live,
         streams,
     })
+}
+
+pub async fn fetch_nickname_from_cookie(cookie: &str, user_agent: &str) -> Option<String> {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8".parse().unwrap());
+    headers.insert("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8".parse().unwrap());
+    headers.insert("Cookie", cookie.parse().ok()?);
+
+    let client = reqwest::Client::builder()
+        .user_agent(user_agent)
+        .default_headers(headers)
+        .timeout(Duration::from_secs(8))
+        .build()
+        .ok()?;
+
+    let res = client.get("https://www.douyin.com/").send().await.ok()?;
+    let html = res.text().await.ok()?;
+
+    // 匹配个人中心或抖音首页中的 title
+    if let Some(caps) = RE_TITLE.captures(&html) {
+        let title = caps.get(1)?.as_str().trim();
+        if title.contains("的抖音") {
+            return Some(title.replace("的抖音", "").replace(" - 抖音", "").trim().to_string());
+        }
+        if title.contains("的个人主页") {
+            return Some(title.replace("的个人主页", "").replace(" - 抖音", "").trim().to_string());
+        }
+        if title.contains("的首页") {
+            return Some(title.replace("的首页", "").replace(" - 抖音", "").trim().to_string());
+        }
+    }
+    None
 }
 
 #[cfg(test)]

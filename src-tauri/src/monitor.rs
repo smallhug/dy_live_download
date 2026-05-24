@@ -49,8 +49,8 @@ pub fn start_monitor_loop(app: AppHandle) {
                     // 异步拉起检测，防止阻塞其他房间检测
                     tauri::async_runtime::spawn(async move {
                         match parse_douyin_live(
-                            &room_clone.url,
-                            &global_clone.cookie,
+                            &room_clone.room_id,
+                            "",  // 状态检测不携带 Cookie，降低凭据泄露风险
                             &global_clone.user_agent,
                             &global_clone.sec_ch_ua,
                         )
@@ -110,7 +110,7 @@ pub fn start_monitor_loop(app: AppHandle) {
                                 }
                             }
                             Err(e) => {
-                                eprintln!("监控解析房间 {} 失败: {}", room_clone.url, e);
+                                eprintln!("监控解析房间(ID: {}) 失败: {}", room_clone.room_id, e);
                             }
                         }
                     });

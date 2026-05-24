@@ -2,8 +2,9 @@ mod config;
 mod parser;
 mod recorder;
 mod monitor;
+mod telemetry;
 
-use config::{load_config, save_config, AppConfig, RoomConfig};
+use config::{load_config, save_config, AppConfig, RoomConfig, CookieItem};
 use parser::{parse_douyin_live, LiveRoomInfo};
 use recorder::{get_active_recordings, start_recording, stop_recording, RecorderState};
 use serde::{Deserialize, Serialize};
@@ -21,7 +22,7 @@ fn update_global_config(
     app: AppHandle,
     ffmpeg_path: String,
     save_dir: String,
-    cookie: String,
+    cookies: Vec<CookieItem>,
     user_agent: String,
     sec_ch_ua: String,
     monitor_interval_secs: u64,
@@ -29,18 +30,19 @@ fn update_global_config(
     let mut config = load_config(&app);
     config.global.ffmpeg_path = ffmpeg_path;
     config.global.save_dir = save_dir;
-    config.global.cookie = cookie;
+    config.global.cookies = cookies;
     config.global.user_agent = user_agent;
     config.global.sec_ch_ua = sec_ch_ua;
     config.global.monitor_interval_secs = monitor_interval_secs;
     save_config(&app, &config)
 }
 
-// 3. 解析直播间基本信息
+// 3. 解析直播间基本信息（仅用于手动状态检测，不携带 Cookie）
 #[tauri::command]
 async fn parse_room(app: AppHandle, url: String) -> Result<LiveRoomInfo, String> {
     let config = load_config(&app);
-    parse_douyin_live(&url, &config.global.cookie, &config.global.user_agent, &config.global.sec_ch_ua).await
+    // 状态检测不需要 Cookie，传入空字符串以避免泄露登录凭据
+    parse_douyin_live(&url, "", &config.global.user_agent, &config.global.sec_ch_ua).await
 }
 
 // 4. 添加直播间
@@ -52,10 +54,12 @@ async fn add_room(
     preferred_quality: String,
     segment_duration_mins: u64,
 ) -> Result<RoomConfig, String> {
+    // 负载均衡选择并自增一个 Cookie 
+    let cookie = get_and_increment_cookie(&app);
     let mut config = load_config(&app);
 
     // 解析直播间，以获取真实的 anchor_name 和 room_id
-    let info = parse_douyin_live(&url, &config.global.cookie, &config.global.user_agent, &config.global.sec_ch_ua).await?;
+    let info = parse_douyin_live(&url, &cookie, &config.global.user_agent, &config.global.sec_ch_ua).await?;
 
     // 检查是否重复
     if config.rooms.iter().any(|r| r.room_id == info.room_id) {
@@ -63,7 +67,6 @@ async fn add_room(
     }
 
     let new_room = RoomConfig {
-        url,
         room_id: info.room_id,
         anchor_name: info.anchor_name,
         is_monitoring,
@@ -113,6 +116,8 @@ async fn start_record_task(
     println!("[🎬 录制] ========== 开始手动录制任务 ==========");
     println!("[🎬 录制] room_id: {}", room_id);
 
+    // 负载均衡选择并自增一个 Cookie 
+    let cookie = get_and_increment_cookie(&app);
     let config = load_config(&app);
     let room = config
         .rooms
@@ -120,10 +125,10 @@ async fn start_record_task(
         .find(|r| r.room_id == room_id)
         .ok_or_else(|| "找不到该直播间配置".to_string())?;
 
-    println!("[🎬 录制] 主播: {}, URL: {}", room.anchor_name, room.url);
+    println!("[🎬 录制] 主播: {}, 房间ID: {}", room.anchor_name, room.room_id);
 
     // 开始解析流地址
-    let info = parse_douyin_live(&room.url, &config.global.cookie, &config.global.user_agent, &config.global.sec_ch_ua).await?;
+    let info = parse_douyin_live(&room.room_id, &cookie, &config.global.user_agent, &config.global.sec_ch_ua).await?;
     
     println!("[🎬 录制] 解析结果 - is_live: {}, streams数量: {}", info.is_live, info.streams.len());
     
@@ -276,46 +281,31 @@ async fn capture_login_cookies(app: AppHandle) -> Result<String, String> {
 async fn open_login_window(app: AppHandle, _current_url: String) -> Result<(), String> {
     use url::Url;
 
-    println!("[Login Assistant Debug] open_login_window command triggered (async version)");
-
-    // 检查是否已经开着
-    if let Some(window) = app.get_webview_window("douyin-login") {
-        println!("[Login Assistant Debug] Window 'douyin-login' already exists. Setting focus.");
-        let _ = window.set_focus();
-        return Ok(());
+    // 如果已存在旧窗口，先关闭以清除会话
+    if let Some(old_window) = app.get_webview_window("douyin-login") {
+        let _ = old_window.close();
     }
 
-    let target_url = Url::parse("https://www.douyin.com").map_err(|e| {
-        let err_msg = format!("解析抖音URL失败: {}", e);
-        println!("[Login Assistant Error] {}", err_msg);
-        err_msg
-    })?;
+    let target_url = Url::parse("https://www.douyin.com").map_err(|e| format!("解析抖音URL失败: {}", e))?;
 
-    println!("[Login Assistant Debug] Creating new 'douyin-login' window with URL: {}", target_url);
-
-    // 直接使用 async 命令创建窗口（Tauri 2.0 Windows 要求）
-    let window_res = tauri::WebviewWindowBuilder::new(
+    let window = tauri::WebviewWindowBuilder::new(
         &app,
         "douyin-login",
         tauri::WebviewUrl::External(target_url),
     )
-    .title("抖音扫码登录助手 (完成登录后请勿关闭此窗口，直接回到原设置页面点击【同步】即可)")
+    .title("抖音扫码登录助手")
     .inner_size(1000.0, 700.0)
     .resizable(true)
     .center()
     .build()
-    .map_err(|e| {
-        let err_msg = format!("创建登录窗口失败: {}", e);
-        println!("[Login Assistant Error] {}", err_msg);
-        err_msg
-    })?;
+    .map_err(|e| format!("创建登录窗口失败: {}", e))?;
 
-    println!("[Login Assistant Debug] Window created successfully");
+    // 通过 JS 清除所有 Cookie，确保未登录状态
+    let _ = window.eval("document.cookie.split(';').forEach(c => { document.cookie = c.trim().split('=')[0] + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=.douyin.com'; }); setTimeout(() => location.reload(), 200);");
 
     #[cfg(debug_assertions)]
     {
-        println!("[Login Assistant Debug] Debug mode detected. Opening DevTools...");
-        let _ = window_res.open_devtools();
+        let _ = window.open_devtools();
     }
 
     Ok(())
@@ -541,6 +531,80 @@ async fn convert_video(
     Ok(())
 }
 
+// 辅助函数：挑选当前使用次数最少的 Cookie，并递增计数后保存
+fn get_and_increment_cookie(app: &AppHandle) -> String {
+    let mut config = load_config(app);
+    if config.global.cookies.is_empty() {
+        return "".to_string();
+    }
+
+    // 寻找 use_count 最小的项
+    let mut min_idx = 0;
+    let mut min_count = u32::MAX;
+    for (idx, item) in config.global.cookies.iter().enumerate() {
+        if item.use_count < min_count {
+            min_count = item.use_count;
+            min_idx = idx;
+        }
+    }
+
+    let cookie_val = config.global.cookies[min_idx].value.clone();
+    
+    // 对其进行自增
+    config.global.cookies[min_idx].use_count += 1;
+    let _ = save_config(app, &config);
+
+    cookie_val
+}
+
+// 13. 提供根据 Cookie 自动解析其登录账号昵称的命令
+#[tauri::command]
+async fn get_cookie_nickname(app: AppHandle, cookie: String) -> Result<Option<String>, String> {
+    let config = load_config(&app);
+    let ua = if config.global.user_agent.trim().is_empty() {
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    } else {
+        &config.global.user_agent
+    };
+
+    Ok(parser::fetch_nickname_from_cookie(&cookie, ua).await)
+}
+
+#[tauri::command]
+async fn check_login_status(app: AppHandle) -> Result<bool, String> {
+    use url::Url;
+
+    let Some(window) = app.get_webview_window("douyin-login") else {
+        return Ok(false);
+    };
+
+    let target_url = Url::parse("https://www.douyin.com")
+        .map_err(|e| format!("URL 解析失败: {}", e))?;
+
+    match window.cookies_for_url(target_url) {
+        Ok(cookies) => {
+            let has_session = cookies.iter().any(|c| c.name() == "sessionid" && !c.value().is_empty());
+            Ok(has_session)
+        }
+        Err(e) => Err(format!("获取 Cookie 失败: {}", e)),
+    }
+}
+
+#[tauri::command]
+async fn validate_cookie(app: AppHandle, cookie: String) -> Result<bool, String> {
+    let config = load_config(&app);
+    let ua = if config.global.user_agent.trim().is_empty() {
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    } else {
+        &config.global.user_agent
+    };
+
+    match parser::fetch_nickname_from_cookie(&cookie, ua).await {
+        Some(_) => Ok(true),
+        None => Ok(false),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -550,7 +614,10 @@ pub fn run() {
         .setup(|app| {
             // 启动后台监控循环
             let app_handle = app.handle().clone();
-            monitor::start_monitor_loop(app_handle);
+            monitor::start_monitor_loop(app_handle.clone());
+
+            // 启动性能遥测循环
+            telemetry::start_telemetry_loop(app_handle);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -566,6 +633,9 @@ pub fn run() {
             get_active_task_titles,
             capture_login_cookies,
             open_login_window,
+            get_cookie_nickname,
+            check_login_status,
+            validate_cookie,
             convert_video
         ])
         .run(tauri::generate_context!())

@@ -1,14 +1,21 @@
+export interface CookieItem {
+  id: string;
+  nickname: string;
+  value: string;
+  acquired_at: string;
+  use_count: number;
+}
+
 export interface GlobalConfig {
   ffmpeg_path: string;
   save_dir: string;
-  cookie: string;
+  cookies: CookieItem[];
   user_agent: string;
   sec_ch_ua: string;
   monitor_interval_secs: number;
 }
 
 export interface RoomConfig {
-  url: string;
   room_id: string;
   anchor_name: string;
   is_monitoring: boolean;
@@ -40,9 +47,13 @@ export interface LiveRoomInfo {
 export interface RecordProgress {
   room_id: string;
   time: string;
-  size: string;
-  bitrate: string;
   status: 'recording' | 'stopped' | 'error';
   error_msg?: string;
   title?: string;
+}
+
+export interface TelemetryPayload {
+  cpu_usage: number;
+  net_recv: number;
+  net_sent: number;
 }

@@ -14,8 +14,6 @@ use tauri::{AppHandle, Emitter};
 pub struct RecordProgress {
     pub room_id: String,
     pub time: String,      // 格式：00:01:23
-    pub size: String,      // 格式：25.4 MB
-    pub bitrate: String,   // 格式：1500 kb/s
     pub status: String,    // "recording" | "stopped" | "error"
     pub error_msg: Option<String>,
     pub title: String,     // 直播间标题
@@ -42,7 +40,7 @@ impl RecorderState {
     }
 }
 
-static RE_PROGRESS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"size=\s*([0-9a-zA-Z\.]+)\s+time=\s*([0-9:\.]+)\s+bitrate=\s*([0-9\.]+[a-zA-Z\/]+)").unwrap());
+static RE_PROGRESS_KEY_VALUE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\w+)\s*=\s*(.+)$").unwrap());
 static RE_ERROR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)(error|failed|invalid|permission denied|connection refused|timeout|no such file|\b404\b|\b403\b|\b502\b|\b503\b)").unwrap());
 
 // 启动录制任务
@@ -90,6 +88,8 @@ pub async fn start_recording(
     // 注意：FFmpeg 参数顺序必须是：[全局选项] -> [输入选项] -> -i URL -> [输出选项] -> 输出文件
     let mut args = vec![
         "-y".to_string(),                           // [全局] 覆盖输出文件
+        "-progress".to_string(),                    // [全局] 输出详细进度信息
+        "pipe:2".to_string(),                       // [全局] 输出到stderr
         "-protocol_whitelist".to_string(),           // [全局] 允许的协议
         "file,http,https,tcp,tls,crypto".to_string(),
         // 以下为输入选项（必须在 -i 之前）
@@ -200,14 +200,15 @@ pub async fn start_recording(
                     RecordProgress {
                         room_id: room_id_clone.clone(),
                         time: "00:00:00".to_string(),
-                        size: "0 B".to_string(),
-                        bitrate: "0 kb/s".to_string(),
                         status: "recording".to_string(),
                         error_msg: None,
                         title: title_clone.clone(),
                     },
                 );
 
+                // 用于存储结构化进度数据
+                let mut progress_data = HashMap::new();
+                
                 while let Ok(Some(line)) = reader.next_line().await {
                     line_count += 1;
                     
@@ -224,36 +225,40 @@ pub async fn start_recording(
                         last_error = Some(if line.len() > 200 { line[..200].to_string() } else { line.clone() });
                     }
                     
-                    // 解析进度信息
-                    if let Some(caps) = RE_PROGRESS.captures(&line) {
-                        let size = caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
-                        let time = caps.get(2).map(|m| m.as_str().to_string()).unwrap_or_default();
-                        // 截取 time 前面的毫秒点，例如 00:00:37.48 -> 00:00:37
-                        let clean_time = if let Some(idx) = time.find('.') {
-                            time[..idx].to_string()
-                        } else {
-                            time
-                        };
-
-                        let bitrate = caps.get(3).map(|m| m.as_str().to_string()).unwrap_or_default();
+                    // 解析结构化进度信息 (key=value 格式)
+                    if let Some(caps) = RE_PROGRESS_KEY_VALUE.captures(&line) {
+                        let key = caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+                        let value = caps.get(2).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
+                        let is_progress_end = key == "progress";
+                        progress_data.insert(key, value);
                         
-                        // 每 10 行进度打印一次日志（避免刷屏）
-                        if line_count % 10 == 0 {
-                            println!("[FFmpeg ⏱️ 进度] {} | {} | {} (已读取{}行)", clean_time, size, bitrate, line_count);
+                        // 当遇到 progress=continue 或 progress=end 时，发送进度更新
+                        if is_progress_end {
+                            let out_time = progress_data.get("out_time").cloned().unwrap_or_default();
+                            
+                            // 格式化时间 (移除微秒部分)
+                            let clean_time = if let Some(dot_pos) = out_time.find('.') {
+                                out_time[..dot_pos].to_string()
+                            } else if out_time.is_empty() {
+                                "00:00:00".to_string()
+                            } else {
+                                out_time
+                            };
+                            
+                            let _ = app_clone.emit(
+                                "record-progress",
+                                RecordProgress {
+                                    room_id: room_id_clone.clone(),
+                                    time: clean_time,
+                                    status: "recording".to_string(),
+                                    error_msg: None,
+                                    title: title_clone.clone(),
+                                },
+                            );
+                            
+                            // 清空进度数据，准备下一次更新
+                            progress_data.clear();
                         }
-
-                        let _ = app_clone.emit(
-                            "record-progress",
-                            RecordProgress {
-                                room_id: room_id_clone.clone(),
-                                time: clean_time,
-                                size,
-                                bitrate,
-                                status: "recording".to_string(),
-                                error_msg: None,
-                                title: title_clone.clone(),
-                            },
-                        );
                     }
                 }
                 
@@ -284,8 +289,6 @@ pub async fn start_recording(
                         RecordProgress {
                             room_id: room_id_clone.clone(),
                             time: "00:00:00".to_string(),
-                            size: "0 B".to_string(),
-                            bitrate: "0 kb/s".to_string(),
                             status,
                             error_msg: err_msg,
                             title: task.title.clone(),

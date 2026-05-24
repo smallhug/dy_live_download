@@ -4,22 +4,30 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CookieItem {
+    pub id: String,            // 唯一标识 (例如时间戳)
+    pub nickname: String,      // 账号昵称
+    pub value: String,         // 实际的 Cookie 字符串内容
+    pub acquired_at: String,   // 获取时间 (YYYY-MM-DD HH:MM:SS)
+    pub use_count: u32,        // 使用次数
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GlobalConfig {
     pub ffmpeg_path: String,
     pub save_dir: String,
-    pub cookie: String,
+    pub cookies: Vec<CookieItem>, // Cookie 列表
     pub user_agent: String,
     pub sec_ch_ua: String,
     pub monitor_interval_secs: u64,
 }
 
 fn default_true() -> bool {
-    true
+  true
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RoomConfig {
-    pub url: String,
     pub room_id: String,          // 直播间唯一标识
     pub anchor_name: String,      // 主播昵称
     pub is_monitoring: bool,      // 是否开启监控
@@ -42,7 +50,7 @@ impl Default for AppConfig {
             global: GlobalConfig {
                 ffmpeg_path: "".to_string(),
                 save_dir: "".to_string(),
-                cookie: "".to_string(),
+                cookies: Vec::new(),
                 user_agent: "".to_string(),
                 sec_ch_ua: "".to_string(),
                 monitor_interval_secs: 60,
