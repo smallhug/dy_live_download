@@ -14,7 +14,9 @@ export interface RoomConfig {
   is_monitoring: boolean;
   preferred_quality: string;
   segment_duration_mins: number;
+  auto_record: boolean;
 }
+
 
 export interface AppConfig {
   global: GlobalConfig;
@@ -42,4 +44,5 @@ export interface RecordProgress {
   bitrate: string;
   status: 'recording' | 'stopped' | 'error';
   error_msg?: string;
+  title?: string;
 }

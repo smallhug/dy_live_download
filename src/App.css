@@ -170,7 +170,6 @@ body {
 }
 
 .room-card:hover {
-  transform: translateY(-2px);
   border-color: #cbd5e1;
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
 }
@@ -182,7 +181,7 @@ body {
 
 /* 卡片头部 */
 .card-header {
-  padding: 16px 20px;
+  padding: 10px 16px;
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
@@ -258,11 +257,11 @@ body {
 
 /* 卡片内容主体 */
 .card-body {
-  padding: 16px 20px;
+  padding: 8px 16px;
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
 }
 
 .info-row {
@@ -325,7 +324,7 @@ body {
 
 /* 卡片操作区 */
 .card-actions {
-  padding: 14px 20px;
+  padding: 8px 16px;
   background: #fafafa;
   border-top: 1px solid #f1f5f9;
   display: flex;

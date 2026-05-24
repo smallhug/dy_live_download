@@ -13,6 +13,10 @@ pub struct GlobalConfig {
     pub monitor_interval_secs: u64,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RoomConfig {
     pub url: String,
@@ -21,7 +25,10 @@ pub struct RoomConfig {
     pub is_monitoring: bool,      // 是否开启监控
     pub preferred_quality: String, // 偏好画质: 原画, 蓝光, 超清, 高清
     pub segment_duration_mins: u64, // 分段时长(分钟)，0表示不分段
+    #[serde(default = "default_true")]
+    pub auto_record: bool,         // 开播后是否自动录制
 }
+
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppConfig {

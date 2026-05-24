@@ -2,7 +2,15 @@ use crate::config::{load_config, RoomConfig};
 use crate::parser::parse_douyin_live;
 use crate::recorder::{start_recording, RecorderState};
 use std::time::Duration;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Emitter};
+
+#[derive(Debug, serde::Serialize, Clone)]
+struct RoomStatusPayload {
+    room_id: String,
+    is_live: bool,
+    title: String,
+}
+
 
 pub fn start_monitor_loop(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
@@ -49,43 +57,55 @@ pub fn start_monitor_loop(app: AppHandle) {
                         .await
                         {
                             Ok(info) => {
+                                // 广播房间状态给前端
+                                let _ = app_clone.emit("room-status", RoomStatusPayload {
+                                    room_id: room_clone.room_id.clone(),
+                                    is_live: info.is_live,
+                                    title: info.title.clone(),
+                                });
+
                                 if info.is_live && !info.streams.is_empty() {
-                                    // 查找画质匹配
-                                    let selected_stream = info
-                                        .streams
-                                        .iter()
-                                        .find(|s| s.quality_name == room_clone.preferred_quality)
-                                        .or_else(|| info.streams.first());
+                                    if room_clone.auto_record {
+                                        // 查找画质匹配
+                                        let selected_stream = info
+                                            .streams
+                                            .iter()
+                                            .find(|s| s.quality_name == room_clone.preferred_quality)
+                                            .or_else(|| info.streams.first());
 
-                                    if let Some(stream) = selected_stream {
-                                        // 优先采用 m3u8 地址，其次为 flv
-                                        let stream_url = stream
-                                            .m3u8_url
-                                            .clone()
-                                            .or_else(|| stream.flv_url.clone());
+                                        if let Some(stream) = selected_stream {
+                                            // 优先采用 flv 地址，其次为 m3u8（与手动录制逻辑一致）
+                                            let stream_url = stream
+                                                .flv_url
+                                                .clone()
+                                                .or_else(|| stream.m3u8_url.clone());
 
-                                        if let Some(url) = stream_url {
-                                            if let Some(recorder_state) = app_clone.try_state::<RecorderState>() {
-                                                let res = start_recording(
-                                                    app_clone.clone(),
-                                                    recorder_state,
-                                                    room_clone.room_id.clone(),
-                                                    info.anchor_name.clone(),
-                                                    url,
-                                                    global_clone.ffmpeg_path.clone(),
-                                                    global_clone.save_dir.clone(),
-                                                    room_clone.segment_duration_mins,
-                                                    global_clone.user_agent.clone(),  // 传入用户配置的 UA
-                                                )
-                                                .await;
+                                             if let Some(url) = stream_url {
+                                                if let Some(recorder_state) = app_clone.try_state::<RecorderState>() {
+                                                    let res = start_recording(
+                                                        app_clone.clone(),
+                                                        recorder_state,
+                                                        room_clone.room_id.clone(),
+                                                        info.anchor_name.clone(),
+                                                        info.title.clone(), // 传入直播标题
+                                                        url,
+                                                        global_clone.ffmpeg_path.clone(),
+                                                        global_clone.save_dir.clone(),
+                                                        room_clone.segment_duration_mins,
+                                                        global_clone.user_agent.clone(),  // 传入用户配置 of UA
+                                                    )
+                                                    .await;
 
-                                                if let Err(e) = res {
-                                                    eprintln!("监控自动录制启动失败 ({}): {}", room_clone.anchor_name, e);
-                                                } else {
-                                                    println!("监控检测到开播，已自动启动录制: {}", info.anchor_name);
+                                                    if let Err(e) = res {
+                                                        eprintln!("监控自动录制启动失败 ({}): {}", room_clone.anchor_name, e);
+                                                    } else {
+                                                        println!("监控检测到开播，已自动启动录制: {}", info.anchor_name);
+                                                    }
                                                 }
                                             }
                                         }
+                                    } else {
+                                        println!("监控检测到开播，但未开启自动录制配置: {}", info.anchor_name);
                                     }
                                 }
                             }

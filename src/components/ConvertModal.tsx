@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { RefreshIcon, FolderIcon, SaveIcon, FileIcon, CloseIcon, CheckIcon, LoadingIcon } from "./Icons";
 
 // ─── 类型定义 ────────────────────────────────────────────
 interface ConvertProgress {
@@ -30,12 +31,12 @@ interface ConvertModalProps {
 
 // ─── 支持的格式 ──────────────────────────────────────────
 const OUTPUT_FORMATS = [
-  { ext: "mp4", label: "MP4（H.264 / 通用）", icon: "🎬" },
-  { ext: "mkv", label: "MKV（万能容器）",     icon: "📦" },
-  { ext: "flv", label: "FLV（推流存档）",      icon: "📡" },
-  { ext: "ts",  label: "TS（传输流）",         icon: "📺" },
-  { ext: "mov", label: "MOV（苹果 QuickTime）", icon: "🍎" },
-  { ext: "avi", label: "AVI（经典格式）",       icon: "💾" },
+  { ext: "mp4", label: "MP4（H.264 / 通用）" },
+  { ext: "mkv", label: "MKV（万能容器）" },
+  { ext: "flv", label: "FLV（推流存档）" },
+  { ext: "ts",  label: "TS（传输流）" },
+  { ext: "mov", label: "MOV（苹果 QuickTime）" },
+  { ext: "avi", label: "AVI（经典格式）" },
 ];
 
 // ─── 工具函数 ────────────────────────────────────────────
@@ -51,6 +52,7 @@ function guessOutputPath(inputPath: string, ext: string, saveDir: string): strin
   return `${dir}${dirSep}${basename}_converted.${ext}`;
 }
 
+// 产生任务ID
 function genTaskId(): string {
   return `conv_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 }
@@ -66,9 +68,10 @@ export const ConvertModal: React.FC<ConvertModalProps> = ({
   const [outputExt, setOutputExt]     = useState("mp4");
   const [outputPath, setOutputPath]   = useState("");
   const [tasks, setTasks]             = useState<ConvertTask[]>([]);
-  const [isDragging, setIsDragging]   = useState(false);
+  const [hoveredExt, setHoveredExt]   = useState<string | null>(null);
+  const [sourceFocused, setSourceFocused] = useState(false);
+  const [outputFocused, setOutputFocused] = useState(false);
   const unlistenRef = useRef<UnlistenFn | null>(null);
-  const dropRef = useRef<HTMLDivElement>(null);
 
   // 自动更新输出路径
   useEffect(() => {
@@ -100,22 +103,6 @@ export const ConvertModal: React.FC<ConvertModalProps> = ({
   }, [isOpen]);
 
   if (!isOpen) return null;
-
-  // ── 拖放处理 ──
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
-  };
-  const handleDragLeave = () => setIsDragging(false);
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    const file = e.dataTransfer.files[0];
-    if (file) {
-      const p: string = (file as any).path || file.name;
-      setInputPath(p);
-    }
-  };
 
   // ── 系统文件选择器：选择源文件 ──
   const handleBrowseInput = async () => {
@@ -149,7 +136,7 @@ export const ConvertModal: React.FC<ConvertModalProps> = ({
 
   // ── 开始转换 ──
   const handleStartConvert = async () => {
-    if (!inputPath.trim()) { alert("请先输入或拖入源视频文件路径"); return; }
+    if (!inputPath.trim()) { alert("请先选择源视频文件路径"); return; }
     if (!outputPath.trim()) { alert("请设置输出文件路径"); return; }
 
     const taskId = genTaskId();
@@ -184,246 +171,308 @@ export const ConvertModal: React.FC<ConvertModalProps> = ({
     setTasks((prev) => prev.filter((t) => t.progress?.status === "running"));
   };
 
-  const selectedFmt = OUTPUT_FORMATS.find((f) => f.ext === outputExt)!;
   const hasFinished = tasks.some((t) => t.progress?.status !== "running");
 
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div
         className="modal-content glass-card"
-        style={{ maxWidth: 600, width: "92vw", maxHeight: "88vh", display: "flex", flexDirection: "column" }}
+        style={{ 
+          maxWidth: 520, 
+          width: "92vw", 
+          display: "flex", 
+          flexDirection: "column", 
+          padding: "16px 20px",
+          gap: "12px"
+        }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* 标题栏 */}
-        <div className="modal-header" style={{ flexShrink: 0 }}>
-          <h2 style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <span style={{ fontSize: 22 }}>🔄</span> 视频格式转换
+        <div className="modal-header" style={{ flexShrink: 0, margin: 0 }}>
+          <h2 style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "16px" }}>
+            <RefreshIcon size={18} style={{ color: "#6366f1" }} /> 视频格式转换
           </h2>
           <button className="close-btn" onClick={onClose}>×</button>
         </div>
 
-        {/* 可滚动主体 */}
-        <div style={{ flex: 1, overflowY: "auto", padding: "0 4px" }}>
-          {/* ── 拖放 / 输入区 ── */}
-          <div
-            ref={dropRef}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            style={{
-              border: `2px dashed ${isDragging ? "#6366f1" : "#c7d2fe"}`,
-              borderRadius: 14,
-              padding: "22px 20px",
-              background: isDragging ? "rgba(99,102,241,0.07)" : "rgba(241,245,249,0.6)",
-              transition: "all 0.2s",
-              marginBottom: 18,
-              cursor: "default",
-            }}
-          >
-            <div style={{ textAlign: "center", marginBottom: 14, color: isDragging ? "#6366f1" : "#94a3b8", fontSize: 13 }}>
-              <span style={{ fontSize: 32, display: "block", marginBottom: 6 }}>📂</span>
-              {isDragging ? "松开鼠标以添加文件" : "将视频文件拖拽到此处，或手动填写路径"}
-            </div>
-            <label style={{ fontSize: 13, fontWeight: 600, color: "#475569", display: "block", marginBottom: 6 }}>
+        {/* 路径配置区 */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+          {/* 源文件路径 */}
+          <div className="form-group">
+            <label style={{ fontSize: "12.5px", fontWeight: "600", color: "#475569", marginBottom: "4px", display: "block" }}>
               源文件路径
             </label>
-            <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ display: "flex", gap: "8px" }}>
               <input
                 type="text"
                 value={inputPath}
                 onChange={(e) => setInputPath(e.target.value)}
-                placeholder="例如：D:\LiveRecords\直播录像.flv"
-                style={{ fontSize: 13, fontFamily: "monospace", flex: 1 }}
+                placeholder="请选择或填写：.flv / .mkv / .mp4 等"
+                onFocus={() => setSourceFocused(true)}
+                onBlur={() => setSourceFocused(false)}
+                style={{ 
+                  fontSize: "12.5px", 
+                  fontFamily: "monospace", 
+                  flex: 1,
+                  padding: "8px 10px",
+                  borderRadius: "6px",
+                  border: `1.5px solid ${sourceFocused ? "#6366f1" : "#cbd5e1"}`,
+                  backgroundColor: "#ffffff",
+                  outline: "none",
+                  boxShadow: sourceFocused ? "0 0 0 3px rgba(99, 102, 241, 0.1)" : "none",
+                  transition: "all 0.15s ease",
+                }}
               />
               <button
                 type="button"
                 className="btn btn-secondary"
                 onClick={handleBrowseInput}
-                style={{ flexShrink: 0, padding: "6px 14px", fontSize: 13, whiteSpace: "nowrap" }}
-                title="打开系统文件选择器"
+                style={{ 
+                  padding: "6px 12px", 
+                  fontSize: "12.5px", 
+                  borderRadius: "6px",
+                  minWidth: "68px"
+                }}
               >
-                📂 浏览
+                <FolderIcon size={12} /> 浏览
               </button>
             </div>
           </div>
 
-          {/* ── 输出格式选择 ── */}
-          <div style={{ marginBottom: 18 }}>
-            <label style={{ fontSize: 13, fontWeight: 600, color: "#475569", display: "block", marginBottom: 10 }}>
-              输出格式
-            </label>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
-              {OUTPUT_FORMATS.map((fmt) => (
-                <button
-                  key={fmt.ext}
-                  type="button"
-                  onClick={() => setOutputExt(fmt.ext)}
-                  style={{
-                    padding: "10px 8px",
-                    borderRadius: 10,
-                    border: `2px solid ${outputExt === fmt.ext ? "#6366f1" : "#e2e8f0"}`,
-                    background: outputExt === fmt.ext ? "rgba(99,102,241,0.1)" : "#fff",
-                    cursor: "pointer",
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    gap: 4,
-                    transition: "all 0.18s",
-                    color: outputExt === fmt.ext ? "#4f46e5" : "#475569",
-                  }}
-                >
-                  <span style={{ fontSize: 20 }}>{fmt.icon}</span>
-                  <span style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: 0.5 }}>
-                    .{fmt.ext.toUpperCase()}
-                  </span>
-                  <span style={{ fontSize: 10, opacity: 0.75, textAlign: "center", lineHeight: 1.3 }}>
-                    {fmt.label.split("（")[1]?.replace("）", "") ?? ""}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* ── 输出路径 ── */}
-          <div style={{ marginBottom: 20 }}>
-            <label style={{ fontSize: 13, fontWeight: 600, color: "#475569", display: "block", marginBottom: 6 }}>
+          {/* 输出文件路径 */}
+          <div className="form-group">
+            <label style={{ fontSize: "12.5px", fontWeight: "600", color: "#475569", marginBottom: "4px", display: "block" }}>
               输出文件路径
             </label>
-            <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ display: "flex", gap: "8px" }}>
               <input
                 type="text"
                 value={outputPath}
                 onChange={(e) => setOutputPath(e.target.value)}
-                placeholder="自动填写，也可手动修改"
-                style={{ fontSize: 13, fontFamily: "monospace", flex: 1 }}
+                placeholder="自动生成，亦可手动修改"
+                onFocus={() => setOutputFocused(true)}
+                onBlur={() => setOutputFocused(false)}
+                style={{ 
+                  fontSize: "12.5px", 
+                  fontFamily: "monospace", 
+                  flex: 1,
+                  padding: "8px 10px",
+                  borderRadius: "6px",
+                  border: `1.5px solid ${outputFocused ? "#6366f1" : "#cbd5e1"}`,
+                  backgroundColor: "#ffffff",
+                  outline: "none",
+                  boxShadow: outputFocused ? "0 0 0 3px rgba(99, 102, 241, 0.1)" : "none",
+                  transition: "all 0.15s ease",
+                }}
               />
               <button
                 type="button"
                 className="btn btn-secondary"
                 onClick={handleBrowseOutput}
-                style={{ flexShrink: 0, padding: "6px 14px", fontSize: 13, whiteSpace: "nowrap" }}
-                title="打开系统另存为对话框"
+                style={{ 
+                  padding: "6px 12px", 
+                  fontSize: "12.5px", 
+                  borderRadius: "6px",
+                  minWidth: "68px"
+                }}
               >
-                💾 另存为
+                <SaveIcon size={12} /> 另存为
               </button>
             </div>
-            <p style={{ fontSize: 11, color: "#94a3b8", marginTop: 5, marginBottom: 0 }}>
-              💡 转换采用流拷贝（无损封装），速度极快，不重新编码，画质零损失
-            </p>
           </div>
-
-          {/* ── 开始按钮 ── */}
-          <button
-            className="btn btn-primary"
-            style={{ width: "100%", padding: "12px 0", fontSize: 15, fontWeight: 700, borderRadius: 12, marginBottom: 24 }}
-            onClick={handleStartConvert}
-          >
-            {selectedFmt.icon} 开始转换为 .{outputExt.toUpperCase()}
-          </button>
-
-          {/* ── 任务列表 ── */}
-          {tasks.length > 0 && (
-            <div>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                <span style={{ fontSize: 13, fontWeight: 700, color: "#334155" }}>转换任务</span>
-                {hasFinished && (
-                  <button
-                    type="button"
-                    onClick={handleClearDone}
-                    style={{ fontSize: 11, color: "#94a3b8", background: "none", border: "none", cursor: "pointer", padding: 0 }}
-                  >
-                    清除已完成
-                  </button>
-                )}
-              </div>
-
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {tasks.map((task) => {
-                  const p = task.progress;
-                  const isDone  = p?.status === "done";
-                  const isError = p?.status === "error";
-                  const pct     = p?.percent ?? 0;
-
-                  return (
-                    <div
-                      key={task.taskId}
-                      style={{
-                        borderRadius: 12,
-                        padding: "14px 16px",
-                        background: isError
-                          ? "rgba(254,226,226,0.6)"
-                          : isDone
-                          ? "rgba(220,252,231,0.6)"
-                          : "rgba(241,245,249,0.8)",
-                        border: `1px solid ${isError ? "#fca5a5" : isDone ? "#86efac" : "#e2e8f0"}`,
-                        transition: "background 0.3s",
-                      }}
-                    >
-                      {/* 文件名行 */}
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                        <span style={{ fontSize: 12, fontWeight: 700, color: "#334155", maxWidth: "70%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={task.inputPath}>
-                          📄 {task.inputPath.split(/[\\/]/).pop()}
-                        </span>
-                        <span style={{
-                          fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 8,
-                          background: isError ? "#fee2e2" : isDone ? "#bbf7d0" : "#e0e7ff",
-                          color: isError ? "#dc2626" : isDone ? "#15803d" : "#4f46e5",
-                        }}>
-                          {isError ? "❌ 失败" : isDone ? "✅ 完成" : `⏳ ${pct.toFixed(1)}%`}
-                        </span>
-                      </div>
-
-                      {/* 进度条 */}
-                      {!isDone && !isError && (
-                        <div style={{ background: "#e2e8f0", borderRadius: 4, height: 6, marginBottom: 8, overflow: "hidden" }}>
-                          <div
-                            style={{
-                              height: "100%",
-                              width: `${pct}%`,
-                              background: "linear-gradient(90deg, #6366f1, #8b5cf6)",
-                              borderRadius: 4,
-                              transition: "width 0.4s ease",
-                            }}
-                          />
-                        </div>
-                      )}
-
-                      {/* 进度指标 */}
-                      {!isError && p && (
-                        <div style={{ display: "flex", gap: 16, fontSize: 11, color: "#64748b" }}>
-                          <span>⏱ {p.time}</span>
-                          <span>⚡ {p.speed}</span>
-                          {isDone && (
-                            <span
-                              style={{ color: "#4f46e5", cursor: "pointer", textDecoration: "underline", marginLeft: "auto" }}
-                              title={task.outputPath}
-                            >
-                              📁 {task.outputPath.split(/[\\/]/).pop()}
-                            </span>
-                          )}
-                        </div>
-                      )}
-
-                      {/* 错误信息 */}
-                      {isError && p?.error_msg && (
-                        <div style={{ fontSize: 11, color: "#dc2626", marginTop: 4, wordBreak: "break-all" }}>
-                          {p.error_msg}
-                        </div>
-                      )}
-
-                      {/* 输出路径 → 目标文件 */}
-                      {!isDone && (
-                        <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={task.outputPath}>
-                          → {task.outputPath}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
         </div>
+
+        {/* 输出格式选择 */}
+        <div>
+          <label style={{ fontSize: "12.5px", fontWeight: "600", color: "#475569", display: "block", marginBottom: "6px" }}>
+            目标格式
+          </label>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 6 }}>
+            {OUTPUT_FORMATS.map((fmt) => {
+              const isSelected = outputExt === fmt.ext;
+              const isHovered = hoveredExt === fmt.ext;
+              return (
+                <button
+                  key={fmt.ext}
+                  type="button"
+                  onClick={() => setOutputExt(fmt.ext)}
+                  onMouseEnter={() => setHoveredExt(fmt.ext)}
+                  onMouseLeave={() => setHoveredExt(null)}
+                  style={{
+                    padding: "8px 4px",
+                    borderRadius: 8,
+                    border: `1.5px solid ${isSelected ? "#6366f1" : isHovered ? "#cbd5e1" : "#e2e8f0"}`,
+                    background: isSelected 
+                      ? "linear-gradient(135deg, rgba(99,102,241,0.08) 0%, rgba(139,92,246,0.08) 100%)" 
+                      : "#ffffff",
+                    cursor: "pointer",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    gap: 2,
+                    transform: isSelected || isHovered ? "translateY(-1px)" : "none",
+                    boxShadow: isSelected 
+                      ? "0 4px 10px rgba(99,102,241,0.12)" 
+                      : isHovered 
+                      ? "0 3px 6px rgba(15,23,42,0.04)" 
+                      : "0 1px 3px rgba(15,23,42,0.01)",
+                    transition: "all 0.18s ease-out",
+                    color: isSelected ? "#4f46e5" : "#475569",
+                    outline: "none",
+                  }}
+                  title={fmt.label}
+                >
+                  <span style={{ fontSize: "12px", fontWeight: 700 }}>
+                    .{fmt.ext.toUpperCase()}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* 开始按钮 */}
+        <button
+          className="btn"
+          style={{ 
+            width: "100%", 
+            padding: "10px 0", 
+            fontSize: "14px", 
+            fontWeight: 700, 
+            borderRadius: "8px", 
+            display: "inline-flex", 
+            alignItems: "center", 
+            justifyContent: "center", 
+            gap: "6px",
+            background: "linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)",
+            color: "#ffffff",
+            border: "none",
+            cursor: "pointer",
+            boxShadow: "0 4px 12px rgba(99, 102, 241, 0.2)",
+            transition: "all 0.15s ease",
+            margin: "4px 0 0 0"
+          }}
+          onClick={handleStartConvert}
+        >
+          开始转换
+        </button>
+
+        {/* 任务列表 */}
+        {tasks.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, marginTop: "4px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+              <span style={{ fontSize: "12.5px", fontWeight: "700", color: "#475569" }}>转换任务</span>
+              {hasFinished && (
+                <button
+                  type="button"
+                  onClick={handleClearDone}
+                  style={{ fontSize: "11px", color: "#94a3b8", background: "none", border: "none", cursor: "pointer", padding: 0 }}
+                >
+                  清除已完成
+                </button>
+              )}
+            </div>
+
+            <div style={{ 
+              display: "flex", 
+              flexDirection: "column", 
+              gap: "8px", 
+              overflowY: "auto", 
+              maxHeight: "140px", 
+              paddingRight: "2px" 
+            }}>
+              {tasks.map((task) => {
+                const p = task.progress;
+                const isDone  = p?.status === "done";
+                const isError = p?.status === "error";
+                const pct     = p?.percent ?? 0;
+
+                return (
+                  <div
+                    key={task.taskId}
+                    style={{
+                      borderRadius: 8,
+                      padding: "10px 12px",
+                      background: isError
+                        ? "linear-gradient(135deg, rgba(254,226,226,0.4) 0%, rgba(254,205,205,0.4) 100%)"
+                        : isDone
+                        ? "linear-gradient(135deg, rgba(240,253,244,0.6) 0%, rgba(220,252,231,0.6) 100%)"
+                        : "linear-gradient(135deg, rgba(248,250,252,0.8) 0%, rgba(241,245,249,0.8) 100%)",
+                      border: `1px solid ${isError ? "#fecaca" : isDone ? "#bbf7d0" : "#e2e8f0"}`,
+                      boxShadow: "0 2px 8px rgba(15,23,42,0.02)",
+                    }}
+                  >
+                    {/* 文件名行 */}
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "#334155", maxWidth: "70%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "inline-flex", alignItems: "center", gap: "4px" }} title={task.inputPath}>
+                        <FileIcon size={13} style={{ color: "#64748b" }} /> {task.inputPath.split(/[\\/]/).pop()}
+                      </span>
+                      <span style={{
+                        fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 6,
+                        background: isError ? "#fee2e2" : isDone ? "#bbf7d0" : "#e0e7ff",
+                        color: isError ? "#dc2626" : isDone ? "#15803d" : "#4f46e5",
+                        display: "inline-flex", alignItems: "center", gap: "2px"
+                      }}>
+                        {isError ? (
+                          <><CloseIcon size={10} /> 失败</>
+                        ) : isDone ? (
+                          <><CheckIcon size={10} /> 完成</>
+                        ) : (
+                          <><LoadingIcon size={10} /> {pct.toFixed(1)}%</>
+                        )}
+                      </span>
+                    </div>
+
+                    {/* 进度条 */}
+                    {!isDone && !isError && (
+                      <div style={{ background: "#e2e8f0", borderRadius: 3, height: 4, marginBottom: 6, overflow: "hidden" }}>
+                        <div
+                          style={{
+                            height: "100%",
+                            width: `${pct}%`,
+                            background: "linear-gradient(90deg, #6366f1, #8b5cf6)",
+                            borderRadius: 3,
+                            transition: "width 0.4s ease",
+                          }}
+                        />
+                      </div>
+                    )}
+
+                    {/* 进度指标 */}
+                    {!isError && p && (
+                      <div style={{ display: "flex", gap: 12, fontSize: 10, color: "#64748b", alignItems: "center" }}>
+                        <span>用时: {p.time}</span>
+                        <span>速度: {p.speed}</span>
+                        {isDone && (
+                          <span
+                            style={{ color: "#6366f1", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: "2px", marginLeft: "auto", fontWeight: "600" }}
+                            title={task.outputPath}
+                          >
+                            <FolderIcon size={11} style={{ color: "#6366f1" }} /> {task.outputPath.split(/[\\/]/).pop()}
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* 错误信息 */}
+                    {isError && p?.error_msg && (
+                      <div style={{ fontSize: 10.5, color: "#dc2626", marginTop: 2, wordBreak: "break-all" }}>
+                        {p.error_msg}
+                      </div>
+                    )}
+
+                    {/* 输出路径 → 目标文件 */}
+                    {!isDone && (
+                      <div style={{ fontSize: 10.5, color: "#94a3b8", marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={task.outputPath}>
+                        → {task.outputPath}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -27,23 +27,23 @@ pub struct LiveRoomInfo {
     pub streams: Vec<LiveStream>,
 }
 
-// 递归查找包含 room 和 stream_url 的子节点
-fn find_room_node(val: &Value) -> Option<&Value> {
+// 递归查找包含 room 和 stream_url 的子节点（可以指定是否必须包含 stream_url）
+fn find_room_node(val: &Value, require_stream: bool) -> Option<&Value> {
     if let Some(obj) = val.as_object() {
         if obj.contains_key("room") {
             let room = obj.get("room").unwrap();
-            if room.get("stream_url").is_some() {
+            if (!require_stream || room.get("stream_url").is_some()) && room.is_object() {
                 return Some(val);
             }
         }
         for (_, child) in obj {
-            if let Some(res) = find_room_node(child) {
+            if let Some(res) = find_room_node(child, require_stream) {
                 return Some(res);
             }
         }
     } else if let Some(arr) = val.as_array() {
         for child in arr {
-            if let Some(res) = find_room_node(child) {
+            if let Some(res) = find_room_node(child, require_stream) {
                 return Some(res);
             }
         }
@@ -141,12 +141,13 @@ pub async fn parse_douyin_live(
     // 1. 优先尝试从最新的 self.__pace_f.push 数据中解析 (现代 Next.js 架构)
     let re_pace = &*RE_PACE;
     let mut room_info_found = None;
+    let mut fallback_room_info = None;
 
     for caps in re_pace.captures_iter(&html) {
         if let Some(matched) = caps.get(1) {
             let raw_str = matched.as_str();
-            // 过滤无流数据的 Pace 推送，以节省性能
-            if !raw_str.contains("stream_url") {
+            // 过滤既无 stream_url 也无 "room" 键的数据以节省性能
+            if !raw_str.contains("stream_url") && !raw_str.contains("\"room\"") {
                 continue;
             }
 
@@ -165,9 +166,13 @@ pub async fn parse_douyin_live(
                 if let Some(s) = start {
                     let json_candidate = &unescaped_str[s..];
                     if let Ok(val) = serde_json::from_str::<Value>(json_candidate) {
-                        if let Some(room_node) = find_room_node(&val) {
+                        if let Some(room_node) = find_room_node(&val, true) {
                             room_info_found = Some(room_node.clone());
                             break;
+                        } else if fallback_room_info.is_none() {
+                            if let Some(room_node) = find_room_node(&val, false) {
+                                fallback_room_info = Some(room_node.clone());
+                            }
                         }
                     }
                 }
@@ -177,6 +182,8 @@ pub async fn parse_douyin_live(
 
     // 2. 如果 pace 模式未匹配到，则回退到匹配传统的 RENDER_DATA 标签
     let room_node = if let Some(node) = room_info_found {
+        node
+    } else if let Some(node) = fallback_room_info {
         node
     } else {
         let re_render = &*RE_RENDER;
@@ -188,7 +195,9 @@ pub async fn parse_douyin_live(
                 .join("");
 
             if let Ok(json_val) = serde_json::from_str::<Value>(&decoded_bytes) {
-                if let Some(node) = find_room_node(&json_val) {
+                if let Some(node) = find_room_node(&json_val, true) {
+                    node.clone()
+                } else if let Some(node) = find_room_node(&json_val, false) {
                     node.clone()
                 } else {
                     return Err("在 RENDER_DATA 中未找到有效直播间数据".to_string());
@@ -299,3 +308,20 @@ pub async fn parse_douyin_live(
         streams,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_offline_room() {
+        let room_id = "510200350291";
+        let res = parse_douyin_live(room_id, "", "", "").await;
+        println!("Result: {:?}", res);
+        assert!(res.is_ok());
+        let info = res.unwrap();
+        assert_eq!(info.is_live, false);
+        assert_eq!(info.streams.len(), 0);
+    }
+}
+

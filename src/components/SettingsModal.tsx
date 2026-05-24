@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { GlobalConfig } from "../types";
+import { KeyIcon, CheckIcon, GlobeIcon, RefreshIcon, LoadingIcon, FolderIcon } from "./Icons";
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -118,7 +119,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           >
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "10px" }}>
               <label style={{ color: isLoggedIn ? "#166534" : "#4f46e5", fontWeight: "700", display: "flex", alignItems: "center", gap: "8px", fontSize: "14px", margin: 0 }}>
-                <span>{isLoggedIn ? "✅" : "🔑"}</span> 
+                <span>{isLoggedIn ? <CheckIcon size={14} style={{ color: "#166534" }} /> : <KeyIcon size={14} style={{ color: "#4f46e5" }} />}</span> 
                 {isLoggedIn ? "抖音账号已登录" : "抖音账号登录"}
               </label>
               {isLoggedIn && (
@@ -140,9 +141,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 type="button" 
                 className="btn btn-primary" 
                 onClick={handleOpenLoginWindow}
-                style={{ flex: 1, background: isLoggedIn ? "#6b7280" : "#4f46e5", fontSize: "12px", padding: "10px" }}
+                style={{ flex: 1, background: isLoggedIn ? "#6b7280" : "#4f46e5", fontSize: "12px", padding: "10px", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px" }}
               >
-                🌐 {isLoggedIn ? "重新登录" : "打开登录窗口"}
+                <GlobeIcon size={14} /> {isLoggedIn ? "重新登录" : "打开登录窗口"}
               </button>
               {!isLoggedIn && (
                 <button 
@@ -150,9 +151,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   className="btn btn-success" 
                   onClick={handleCaptureCookies}
                   disabled={isSyncing}
-                  style={{ flex: 1, fontSize: "12px", padding: "10px" }}
+                  style={{ flex: 1, fontSize: "12px", padding: "10px", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px" }}
                 >
-                  {isSyncing ? "⏳ 同步中..." : "🔄 同步登录状态"}
+                  {isSyncing ? <><LoadingIcon size={14} /> 同步中...</> : <><RefreshIcon size={14} /> 同步登录状态</>}
                 </button>
               )}
             </div>
@@ -161,7 +162,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {/* 保存目录 */}
           <div className="form-group">
             <label style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px" }}>
-              <span>📁</span> 视频保存目录
+              <FolderIcon size={14} /> 视频保存目录
             </label>
             <input
               type="text"
@@ -182,8 +183,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <button type="button" className="btn btn-secondary" onClick={onClose} disabled={isSaving}>
               取消
             </button>
-            <button type="submit" className="btn btn-primary" disabled={isSaving}>
-              {isSaving ? "💾 保存中..." : "✅ 保存配置"}
+            <button type="submit" className="btn btn-primary" disabled={isSaving} style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+              {isSaving ? <><LoadingIcon size={14} /> 保存中...</> : <><CheckIcon size={14} /> 保存配置</>}
             </button>
           </div>
         </form>

@@ -69,7 +69,9 @@ async fn add_room(
         is_monitoring,
         preferred_quality,
         segment_duration_mins,
+        auto_record: false,
     };
+
 
     config.rooms.push(new_room.clone());
     save_config(&app, &config)?;
@@ -169,6 +171,7 @@ async fn start_record_task(
         state,
         room_id,
         info.anchor_name,
+        info.title, // 传入直播标题
         stream_url,
         config.global.ffmpeg_path,
         config.global.save_dir,
@@ -191,6 +194,19 @@ async fn stop_record_task(state: State<'_, RecorderState>, room_id: String) -> R
 #[tauri::command]
 async fn get_active_tasks(state: State<'_, RecorderState>) -> Result<Vec<String>, String> {
     Ok(get_active_recordings(state).await)
+}
+
+// 获取当前正在录制的直播间标题映射
+#[tauri::command]
+async fn get_active_task_titles(
+    state: State<'_, RecorderState>,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    let tasks = state.tasks.lock().await;
+    let mut map = std::collections::HashMap::new();
+    for (room_id, task) in tasks.iter() {
+        map.insert(room_id.clone(), task.title.clone());
+    }
+    Ok(map)
 }
 
 // 10. 从内置的"douyin-login"子窗口中动态截取包含 HttpOnly 在内的所有 Cookie
@@ -547,6 +563,7 @@ pub fn run() {
             start_record_task,
             stop_record_task,
             get_active_tasks,
+            get_active_task_titles,
             capture_login_cookies,
             open_login_window,
             convert_video

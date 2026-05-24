@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { RoomConfig } from "../types";
+import { SettingsIcon, MovieIcon, TimerIcon, BroadcastIcon, CameraIcon, TipIcon, CheckIcon } from "./Icons";
 
 interface RoomSettingsModalProps {
   isOpen: boolean;
@@ -16,12 +17,16 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
 }) => {
   const [quality, setQuality] = useState("原画");
   const [segmentMins, setSegmentMins] = useState(0);
+  const [isMonitoring, setIsMonitoring] = useState(false);
+  const [autoRecord, setAutoRecord] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     if (isOpen && room) {
       setQuality(room.preferred_quality || "原画");
       setSegmentMins(room.segment_duration_mins || 0);
+      setIsMonitoring(room.is_monitoring ?? false);
+      setAutoRecord(room.auto_record ?? true);
     }
   }, [isOpen, room]);
 
@@ -35,6 +40,8 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
         ...room,
         preferred_quality: quality,
         segment_duration_mins: segmentMins,
+        is_monitoring: isMonitoring,
+        auto_record: autoRecord,
       });
       onClose();
     } catch (err) {
@@ -48,110 +55,138 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     <div className="modal-overlay" onClick={onClose}>
       <div 
         className="modal-content glass-card" 
-        style={{ maxWidth: "420px" }} 
+        style={{ maxWidth: "380px" }} 
         onClick={(e) => e.stopPropagation()}
       >
         {/* 头部 */}
         <div className="modal-header">
           <h2 style={{ fontSize: "16px", display: "flex", alignItems: "center", gap: "8px" }}>
-            ⚙️ 直播间设置
+            <SettingsIcon size={18} style={{ color: "#6366f1" }} /> 直播间设置
           </h2>
           <button className="close-btn" onClick={onClose} disabled={isSaving}>
             &times;
           </button>
         </div>
 
-        {/* 主播信息 */}
-        <div style={{ 
-          background: "linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%)", 
-          padding: "12px 14px", 
-          borderRadius: "10px", 
-          marginBottom: "18px",
-          border: "1px solid #cbd5e1"
-        }}>
-          <div style={{ fontWeight: "700", fontSize: "14px", color: "#1e293b", marginBottom: "4px" }}>
-            🎤 {room.anchor_name}
+        <form onSubmit={handleSave} className="modal-form" style={{ gap: "12px" }}>
+          {/* 录制画质 & 自动分段 - 并排 */}
+          <div style={{ display: "flex", gap: "12px" }}>
+            <div className="form-group" style={{ flex: 1 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "4px", marginBottom: "6px", fontWeight: "600", fontSize: "12.5px", color: "#334155" }}>
+                <MovieIcon size={13} /> 录制画质
+              </label>
+              <select
+                value={quality}
+                onChange={(e) => setQuality(e.target.value)}
+                disabled={isSaving}
+                style={{
+                  width: "100%",
+                  padding: "6px 8px",
+                  fontSize: "13px",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: "6px",
+                  backgroundColor: "#ffffff",
+                  color: "#1e293b",
+                  outline: "none",
+                }}
+              >
+                <option value="原画">原画</option>
+                <option value="蓝光">蓝光</option>
+                <option value="超清">超清</option>
+                <option value="高清">高清</option>
+                <option value="标清">标清</option>
+              </select>
+            </div>
+            <div className="form-group" style={{ flex: 1 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "4px", marginBottom: "6px", fontWeight: "600", fontSize: "12.5px", color: "#334155" }}>
+                <TimerIcon size={13} /> 分段时长
+              </label>
+              <select
+                value={segmentMins}
+                onChange={(e) => setSegmentMins(Number(e.target.value))}
+                disabled={isSaving}
+                style={{
+                  width: "100%",
+                  padding: "6px 8px",
+                  fontSize: "13px",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: "6px",
+                  backgroundColor: "#ffffff",
+                  color: "#1e293b",
+                  outline: "none",
+                }}
+              >
+                <option value={0}>不分段</option>
+                <option value={15}>15分钟</option>
+                <option value={30}>30分钟</option>
+                <option value={60}>60分钟</option>
+                <option value={120}>120分钟</option>
+              </select>
+            </div>
           </div>
-          <div style={{ fontSize: "11.5px", color: "#64748b" }}>
-            房间 ID: {room.room_id}
-          </div>
-        </div>
 
-        <form onSubmit={handleSave} className="modal-form">
-          {/* 画质选择 - 下拉列表 */}
-          <div className="form-group">
-            <label style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px", fontWeight: "600", fontSize: "13px", color: "#334155" }}>
-              <span>🎬</span> 录制画质
-            </label>
-            <select
-              value={quality}
-              onChange={(e) => setQuality(e.target.value)}
-              disabled={isSaving}
-              style={{
-                width: "100%",
-                padding: "10px 12px",
-                fontSize: "14px",
-                border: "2px solid #e2e8f0",
-                borderRadius: "8px",
-                backgroundColor: "#ffffff",
-                color: "#1e293b",
-                cursor: "pointer",
-                outline: "none",
-                transition: "border-color 0.15s ease",
-              }}
-              onFocus={(e) => e.currentTarget.style.borderColor = "#6366f1"}
-              onBlur={(e) => e.currentTarget.style.borderColor = "#e2e8f0"}
-            >
-              <option value="原画">原画（最高画质）</option>
-              <option value="蓝光">蓝光（高清流畅）</option>
-              <option value="超清">超清（清晰度高）</option>
-              <option value="高清">高清（通用推荐）</option>
-              <option value="标清">标清（节省流量）</option>
-            </select>
+          {/* 自动监控 & 自动录制 - 并排 */}
+          <div style={{ display: "flex", gap: "12px", marginTop: "4px" }}>
+            <div className="form-group" style={{ flex: 1 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "4px", marginBottom: "6px", fontWeight: "600", fontSize: "12.5px", color: "#334155" }}>
+                <BroadcastIcon size={13} /> 自动监控
+              </label>
+              <select
+                value={isMonitoring ? "true" : "false"}
+                onChange={(e) => setIsMonitoring(e.target.value === "true")}
+                disabled={isSaving}
+                style={{
+                  width: "100%",
+                  padding: "6px 8px",
+                  fontSize: "13px",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: "6px",
+                  backgroundColor: "#ffffff",
+                  color: "#1e293b",
+                  outline: "none",
+                }}
+              >
+                <option value="true">开启监控</option>
+                <option value="false">关闭监控</option>
+              </select>
+            </div>
+            <div className="form-group" style={{ flex: 1 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "4px", marginBottom: "6px", fontWeight: "600", fontSize: "12.5px", color: "#334155" }}>
+                <CameraIcon size={13} /> 自动录制
+              </label>
+              <select
+                value={autoRecord ? "true" : "false"}
+                onChange={(e) => setAutoRecord(e.target.value === "true")}
+                disabled={isSaving || !isMonitoring}
+                style={{
+                  width: "100%",
+                  padding: "6px 8px",
+                  fontSize: "13px",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: "6px",
+                  backgroundColor: isMonitoring ? "#ffffff" : "#f1f5f9",
+                  color: isMonitoring ? "#1e293b" : "#94a3b8",
+                  cursor: isMonitoring ? "pointer" : "not-allowed",
+                  outline: "none",
+                }}
+              >
+                <option value="true">开启录制</option>
+                <option value="false">关闭录制</option>
+              </select>
+            </div>
           </div>
 
-          {/* 分段设置 - 下拉列表 */}
-          <div className="form-group" style={{ marginTop: "18px" }}>
-            <label style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px", fontWeight: "600", fontSize: "13px", color: "#334155" }}>
-              <span>⏱️</span> 自动分段时长
-            </label>
-            <select
-              value={segmentMins}
-              onChange={(e) => setSegmentMins(Number(e.target.value))}
-              disabled={isSaving}
-              style={{
-                width: "100%",
-                padding: "10px 12px",
-                fontSize: "14px",
-                border: "2px solid #e2e8f0",
-                borderRadius: "8px",
-                backgroundColor: "#ffffff",
-                color: "#1e293b",
-                cursor: "pointer",
-                outline: "none",
-                transition: "border-color 0.15s ease",
-              }}
-              onFocus={(e) => e.currentTarget.style.borderColor = "#6366f1"}
-              onBlur={(e) => e.currentTarget.style.borderColor = "#e2e8f0"}
-            >
-              <option value={0}>不分段（录制为单个完整文件）</option>
-              <option value={15}>每 15 分钟自动分段</option>
-              <option value={30}>每 30 分钟自动分段（推荐）</option>
-              <option value={60}>每 60 分钟自动分段</option>
-              <option value={120}>每 120 分钟自动分段</option>
-            </select>
-            <p style={{ fontSize: "11px", color: "#94a3b8", marginTop: "8px", margin: 0 }}>
-              💡 设置为"不分段"时，整个直播会录制为一个完整的视频文件
-            </p>
-          </div>
+          <p style={{ fontSize: "11px", color: "#94a3b8", marginTop: "6px", margin: 0, display: "flex", alignItems: "center", gap: "4px" }}>
+            <TipIcon size={12} style={{ color: "#94a3b8" }} /> 提示: 必须开启“自动监控”后，才能触发自动录制。
+          </p>
 
           {/* 操作按钮 */}
-          <div className="modal-actions" style={{ marginTop: "22px", paddingTop: "18px", borderTop: "1px solid #e2e8f0" }}>
-            <button type="button" className="btn btn-secondary" onClick={onClose} disabled={isSaving}>
+          <div className="modal-actions" style={{ marginTop: "12px", paddingTop: "12px", borderTop: "1px solid #e2e8f0" }}>
+            <button type="button" className="btn btn-secondary" onClick={onClose} disabled={isSaving} style={{ padding: "6px 12px", fontSize: "12.5px" }}>
               取消
             </button>
-            <button type="submit" className="btn btn-primary" disabled={isSaving}>
-              {isSaving ? "保存中..." : "✅ 保存设置"}
+            <button type="submit" className="btn btn-primary" disabled={isSaving} style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "6px 12px", fontSize: "12.5px" }}>
+              {isSaving ? "保存中..." : <><CheckIcon size={13} /> 保存设置</>}
             </button>
           </div>
         </form>

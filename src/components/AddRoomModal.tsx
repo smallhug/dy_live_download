@@ -29,8 +29,8 @@ export const AddRoomModal: React.FC<AddRoomModalProps> = ({
     setIsLoading(true);
     setError(null);
     try {
-      // 默认参数：默认不监控 (false)，默认标清画质，默认分段 30 分钟
-      await onAdd(url, false, "标清", 30);
+      // 默认参数：默认开启监控 (true)，默认标清画质，默认分段 30 分钟
+      await onAdd(url, true, "标清", 30);
       setUrl("");
       onClose();
     } catch (err: any) {

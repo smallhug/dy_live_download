@@ -1,17 +1,24 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { message } from "@tauri-apps/plugin-dialog";
 import { AppConfig, RoomConfig, RecordProgress, LiveRoomInfo } from "./types";
 import { StatusBar } from "./components/StatusBar";
 import { SettingsModal } from "./components/SettingsModal";
 import { AddRoomModal } from "./components/AddRoomModal";
 import { RoomSettingsModal } from "./components/RoomSettingsModal";
 import { ConvertModal } from "./components/ConvertModal";
+import { RefreshIcon, SettingsIcon, TrashIcon, TvIcon, TimerIcon, MovieIcon, LoadingIcon } from "./components/Icons";
 import "./App.css";
 
 function App() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [activeTasks, setActiveTasks] = useState<string[]>([]);
+  const configRef = useRef<AppConfig | null>(null);
+
+  useEffect(() => {
+    configRef.current = config;
+  }, [config]);
   const [progressMap, setProgressMap] = useState<Record<string, RecordProgress>>({});
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAddRoomOpen, setIsAddRoomOpen] = useState(false);
@@ -20,6 +27,7 @@ function App() {
   const [selectedRoomForSettings, setSelectedRoomForSettings] = useState<RoomConfig | null>(null);
   const [roomStatuses, setRoomStatuses] = useState<Record<string, { is_live: boolean; title?: string }>>({});
   const [checkingRooms, setCheckingRooms] = useState<Record<string, boolean>>({});
+  const [recordLoading, setRecordLoading] = useState<Record<string, "starting" | "stopping" | null>>({});
 
   // 获取全局配置
   const fetchConfig = async () => {
@@ -36,8 +44,21 @@ function App() {
     try {
       const res = await invoke<string[]>("get_active_tasks");
       setActiveTasks(res);
+
+      // 获取正在录制直播间的标题映射，并写入状态缓存
+      const titles = await invoke<Record<string, string>>("get_active_task_titles");
+      setRoomStatuses((prev) => {
+        const next = { ...prev };
+        for (const [roomId, title] of Object.entries(titles)) {
+          next[roomId] = {
+            is_live: true,
+            title: title || next[roomId]?.title || "",
+          };
+        }
+        return next;
+      });
     } catch (err) {
-      console.error("获取录制列表失败:", err);
+      console.error("获取录制列表或标题失败:", err);
     }
   };
 
@@ -62,21 +83,60 @@ function App() {
           return prev;
         });
         // 既然在录制，说明肯定是在播状态
-        setRoomStatuses((prev) => ({
-          ...prev,
-          [progress.room_id]: { is_live: true },
-        }));
+        setRoomStatuses((prev) => {
+          const current = prev[progress.room_id];
+          return {
+            ...prev,
+            [progress.room_id]: { 
+              is_live: true,
+              title: progress.title || current?.title || ""
+            },
+          };
+        });
       } else if (progress.status === "stopped" || progress.status === "error") {
         setActiveTasks((prev) => prev.filter((id) => id !== progress.room_id));
-        setRoomStatuses((prev) => ({
-          ...prev,
-          [progress.room_id]: { is_live: false },
-        }));
+        setRoomStatuses((prev) => {
+          const current = prev[progress.room_id];
+          return {
+            ...prev,
+            [progress.room_id]: { 
+              is_live: false,
+              title: progress.title || current?.title || ""
+            },
+          };
+        });
+
+        // 如果是录制发生错误，弹出精美的系统对话框提示用户
+        if (progress.status === "error" && progress.error_msg) {
+          const rooms = configRef.current?.rooms || [];
+          const anchor = rooms.find((r) => r.room_id === progress.room_id)?.anchor_name || "未知主播";
+          message(`主播【${anchor}】的录制任务异常中断！\n\n错误信息：\n${progress.error_msg}`, {
+            title: "录制异常中断",
+            kind: "error",
+          });
+        }
       }
+    });
+
+    // 监听 Rust 后端发送的直播状态通知
+    const unlistenRoomStatusPromise = listen<{ room_id: string; is_live: boolean; title: string }>("room-status", (event) => {
+      const payload = event.payload;
+      setRoomStatuses((prev) => {
+        const prevStatus = prev[payload.room_id];
+        const nextTitle = payload.is_live ? payload.title : (prevStatus?.title || payload.title);
+        return {
+          ...prev,
+          [payload.room_id]: { 
+            is_live: payload.is_live, 
+            title: nextTitle 
+          },
+        };
+      });
     });
 
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
+      unlistenRoomStatusPromise.then((unlisten) => unlisten());
     };
   }, []);
 
@@ -145,29 +205,6 @@ function App() {
     }
   };
 
-  // 快捷切换监控状态
-  const handleToggleMonitor = async (room: RoomConfig) => {
-    console.log("handleToggleMonitor triggered for room:", room.room_id, "current is_monitoring:", room.is_monitoring);
-    const updated = { ...room, is_monitoring: !room.is_monitoring };
-    try {
-      await invoke("update_room_config", { room: updated });
-      await fetchConfig();
-    } catch (err) {
-      alert("更新监控状态失败: " + err);
-    }
-  };
-
-  // 快捷切换偏好画质
-  const handleQualityChange = async (room: RoomConfig, quality: string) => {
-    console.log("handleQualityChange triggered for room:", room.room_id, "new quality:", quality);
-    const updated = { ...room, preferred_quality: quality };
-    try {
-      await invoke("update_room_config", { room: updated });
-      await fetchConfig();
-    } catch (err) {
-      alert("更新画质偏好失败: " + err);
-    }
-  };
 
   // 手动检测直播间开播状态
   const handleCheckRoomStatus = async (room: RoomConfig) => {
@@ -176,12 +213,17 @@ function App() {
     try {
       const info = await invoke<LiveRoomInfo>("parse_room", { url: room.url });
       console.log("parse_room success info:", info);
-      setRoomStatuses((prev) => ({
-        ...prev,
-        [room.room_id]: { is_live: info.is_live, title: info.title },
-      }));
+      setRoomStatuses((prev) => {
+        const prevStatus = prev[room.room_id];
+        const nextTitle = info.is_live ? info.title : (prevStatus?.title || info.title);
+        return {
+          ...prev,
+          [room.room_id]: { is_live: info.is_live, title: nextTitle },
+        };
+      });
       // 同时更新主播名字，以防开播时获取了真实名称
-      if (info.anchor_name && info.anchor_name !== room.anchor_name) {
+      // 仅在开播状态下，且获取到了有效的主播名称时，才更新卡片昵称
+      if (info.is_live && info.anchor_name && info.anchor_name !== "未知主播" && info.anchor_name !== room.anchor_name) {
         const updated = { ...room, anchor_name: info.anchor_name };
         await invoke("update_room_config", { room: updated });
         await fetchConfig();
@@ -198,7 +240,7 @@ function App() {
   const handleStartRecord = async (roomId: string) => {
     console.log("🎬 [前端] ========== 开始手动录制 ==========");
     console.log("🎬 [前端] roomId:", roomId);
-    
+    setRecordLoading((prev) => ({ ...prev, [roomId]: "starting" }));
     try {
       console.log("🎬 [前端] 调用后端 start_record_task...");
       const result = await invoke("start_record_task", { roomId });
@@ -209,19 +251,26 @@ function App() {
       console.error("❌ [前端] 错误类型:", typeof err);
       console.error("❌ [前端] 错误消息:", err?.message || err?.toString() || "未知错误");
       
-      // 显示详细的错误信息
       const errorMsg = err?.message || err?.toString() || "未知错误（请查看终端日志）";
-      alert(`⚠️ 启动录制失败\n\n${errorMsg}\n\n请查看终端窗口的详细日志获取更多信息。`);
+      message(`录制启动失败！\n\n错误详情:\n${errorMsg}`, {
+        title: "启动录制失败",
+        kind: "error",
+      });
+    } finally {
+      setRecordLoading((prev) => ({ ...prev, [roomId]: null }));
     }
   };
 
   // 手动停止录制
   const handleStopRecord = async (roomId: string) => {
     console.log("handleStopRecord triggered for roomId:", roomId);
+    setRecordLoading((prev) => ({ ...prev, [roomId]: "stopping" }));
     try {
       await invoke("stop_record_task", { roomId });
     } catch (err: any) {
       alert("停止录制失败: " + err.toString());
+    } finally {
+      setRecordLoading((prev) => ({ ...prev, [roomId]: null }));
     }
   };
 
@@ -240,13 +289,13 @@ function App() {
         </div>
         <div className="header-actions">
           <button className="btn btn-secondary" onClick={() => setIsConvertOpen(true)}>
-            🔄 格式转换
+            <RefreshIcon size={14} style={{ marginRight: "6px" }} />格式转换
           </button>
           <button className="btn btn-secondary" onClick={() => setIsSettingsOpen(true)}>
-            ⚙️ 全局设置
+            <SettingsIcon size={14} style={{ marginRight: "6px" }} />全局设置
           </button>
           <button className="btn btn-primary" onClick={() => setIsAddRoomOpen(true)}>
-            ➕ 添加主播
+            <span style={{ marginRight: "4px", fontSize: "14px", fontWeight: "bold" }}>+</span>添加主播
           </button>
         </div>
       </header>
@@ -255,7 +304,7 @@ function App() {
       <main className="content-area">
         {!config || !config.rooms || config.rooms.length === 0 ? (
           <div className="empty-state glass-card">
-            <div className="empty-icon">📺</div>
+            <div className="empty-icon"><TvIcon size={48} style={{ color: "#94a3b8" }} /></div>
             <h3>任务列表空空如也</h3>
             <p>点击右上角的 “添加主播” 按钮，输入抖音直播间链接开始实时监控和录制吧！</p>
             <button className="btn btn-primary" onClick={() => setIsAddRoomOpen(true)}>
@@ -277,42 +326,42 @@ function App() {
                 <div key={room.room_id} className={`room-card glass-card ${isRecording ? "is-recording" : ""}`}>
                   {/* 卡片头部 */}
                   <div className="card-header">
-                    <div className="card-header-left">
+                    <div className="card-header-left" style={{ flex: 1, minWidth: 0, marginRight: "12px" }}>
                       <div className="anchor-name" title={room.anchor_name}>
                         {room.anchor_name}
                       </div>
                       <div className="room-id">ID: {room.room_id}</div>
+                      <div className="room-title" style={{ 
+                        fontSize: "12px", 
+                        color: "#64748b", 
+                        overflow: "hidden", 
+                        textOverflow: "ellipsis", 
+                        whiteSpace: "nowrap", 
+                        marginTop: "4px",
+                        height: "18px",
+                        lineHeight: "18px"
+                      }} title={status?.title || ""}>
+                        {status?.title ? status.title : <span style={{ color: "#cbd5e1" }}>-</span>}
+                      </div>
                     </div>
-                    <div className="card-header-right" style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <div className="card-header-right" style={{ display: "flex", alignItems: "center" }}>
                       {/* 设置按钮 */}
                       <button
                         className="icon-btn"
                         onClick={() => handleOpenRoomSettings(room)}
                         title="直播间设置（画质、分段等）"
-                        style={{ fontSize: "14px", padding: "4px 6px" }}
+                        style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: "24px", height: "24px", padding: 0 }}
                       >
-                        ⚙️
+                        <SettingsIcon size={14} />
                       </button>
-                      <span className={`status-badge ${isLive ? "live" : "offline"}`}>
-                        <span className="dot"></span>
-                        {isLive ? "直播中" : "未开播"}
-                      </span>
                     </div>
                   </div>
 
                   {/* 卡片身体 */}
                   <div className="card-body">
-                    {status?.title && (
-                      <div className="info-row" style={{ marginBottom: "4px" }}>
-                        <span className="info-label">直播标题:</span>
-                        <span className="info-value" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "180px" }} title={status.title}>
-                          {status.title}
-                        </span>
-                      </div>
-                    )}
                     
                     {/* 设置摘要显示 */}
-                    <div style={{ display: "flex", gap: "12px", marginTop: "6px", marginBottom: "6px" }}>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 10px", marginTop: "2px", marginBottom: "2px" }}>
                       <div style={{ 
                         display: "inline-flex", 
                         alignItems: "center", 
@@ -324,7 +373,7 @@ function App() {
                         color: "#475569",
                         fontWeight: "500"
                       }}>
-                        🎬 {room.preferred_quality || "原画"}
+                        <MovieIcon size={12} style={{ color: "#64748b" }} /> {room.preferred_quality || "原画"}
                       </div>
                       <div style={{ 
                         display: "inline-flex", 
@@ -337,48 +386,58 @@ function App() {
                         color: "#475569",
                         fontWeight: "500"
                       }}>
-                        ⏱️ {room.segment_duration_mins > 0 ? `${room.segment_duration_mins}分钟/段` : "不分段"}
+                        <TimerIcon size={12} style={{ color: "#64748b" }} /> {room.segment_duration_mins > 0 ? `${room.segment_duration_mins}分钟/段` : "不分段"}
                       </div>
-                    </div>
 
-                    {/* 录制进度面板 */}
-                    {isRecording && progress && (
-                      <div className="progress-panel">
-                        <div className="progress-title">
-                          <span>●</span> 正在实时抓流录制
+                      {/* 动态录制时长标签，悬浮可看大小和码率 */}
+                      {isRecording && progress && (
+                        <div 
+                          style={{ 
+                            display: "inline-flex", 
+                            alignItems: "center", 
+                            gap: "5px",
+                            padding: "3px 8px",
+                            background: "#ecfdf5",
+                            borderRadius: "6px",
+                            fontSize: "11.5px",
+                            color: "#059669",
+                            fontWeight: "600",
+                            cursor: "help"
+                          }}
+                          title={`视频大小: ${progress.size || "计算中"} | 实时码率: ${progress.bitrate || "计算中"}`}
+                        >
+                          <span style={{ 
+                            display: "inline-block", 
+                            width: "6px", 
+                            height: "6px", 
+                            borderRadius: "50%", 
+                            backgroundColor: "#10b981",
+                            animation: "blink 1.5s infinite ease-in-out" 
+                          }}></span>
+                          录制 {progress.time || "00:00:00"}
                         </div>
-                        <div className="progress-grid">
-                          <div className="progress-stat">
-                            <span className="stat-label">已录时长</span>
-                            <span className="stat-value">{progress.time}</span>
-                          </div>
-                          <div className="progress-stat">
-                            <span className="stat-label">视频大小</span>
-                            <span className="stat-value">{progress.size}</span>
-                          </div>
-                          <div className="progress-stat">
-                            <span className="stat-label">实时码率</span>
-                            <span className="stat-value">{progress.bitrate}</span>
-                          </div>
-                        </div>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </div>
 
                   {/* 卡片底栏操作区 */}
                   <div className="card-actions">
-                    <div className="action-left">
-                      <label className="switch-label">
-                        <input
-                          type="checkbox"
-                          className="switch-input"
-                          checked={room.is_monitoring}
-                          onChange={() => handleToggleMonitor(room)}
-                          disabled={isRecording}
-                        />
-                        <span className="switch-slider"></span>
-                        监控开播
-                      </label>
+                    <div className="action-left" style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                      <span className={`status-badge ${isLive ? "live" : "offline"}`} style={{ padding: "1px 6px", borderRadius: "4px" }}>
+                        <span className="dot"></span>
+                        {isLive ? "直播中" : "未开播"}
+                      </span>
+                      {room.is_monitoring ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "#10b981", fontWeight: "600" }} title="当前已开启自动开播监控">
+                          <span style={{ display: "inline-block", width: "6px", height: "6px", borderRadius: "50%", backgroundColor: "#10b981", animation: "blink 1.5s infinite ease-in-out" }}></span>
+                          监控中
+                        </div>
+                      ) : (
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "#94a3b8", fontWeight: "500" }} title="当前已关闭监控，仅可手动录制">
+                          <span style={{ display: "inline-block", width: "6px", height: "6px", borderRadius: "50%", backgroundColor: "#cbd5e1" }}></span>
+                          未监控
+                        </div>
+                      )}
                     </div>
 
                     <div className="action-right">
@@ -388,8 +447,9 @@ function App() {
                         onClick={() => handleCheckRoomStatus(room)}
                         disabled={isChecking || isRecording}
                         title="检测当前直播间是否开播"
+                        style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: "24px", height: "24px", padding: 0 }}
                       >
-                        {isChecking ? "⏳" : "🔄"}
+                        {isChecking ? <LoadingIcon size={14} /> : <RefreshIcon size={14} />}
                       </button>
 
                       {/* 删除按钮 */}
@@ -397,27 +457,40 @@ function App() {
                         className="icon-btn icon-btn-danger"
                         onClick={() => handleDeleteRoom(room.room_id)}
                         title="删除此任务"
+                        style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: "24px", height: "24px", padding: 0 }}
                       >
-                        🗑️
+                        <TrashIcon size={14} />
                       </button>
 
                       {/* 录制控制 */}
                       {isRecording ? (
                         <button
                           className="btn btn-danger"
-                          style={{ padding: "6px 12px", borderRadius: "8px", fontSize: "12px" }}
+                          style={{ padding: "6px 12px", borderRadius: "8px", fontSize: "12px", minWidth: "80px", display: "inline-flex", alignItems: "center", gap: "4px" }}
                           onClick={() => handleStopRecord(room.room_id)}
+                          disabled={recordLoading[room.room_id] === "stopping"}
                         >
-                          停止录制
+                          {recordLoading[room.room_id] === "stopping" ? (
+                            <><LoadingIcon size={12} /> 停止中</>
+                          ) : (
+                            "停止录制"
+                          )}
                         </button>
                       ) : (
                         <button
                           className={`btn ${isLive ? "btn-success" : "btn-secondary"}`}
-                          style={{ padding: "6px 12px", borderRadius: "8px", fontSize: "12px" }}
+                          style={{ padding: "6px 12px", borderRadius: "8px", fontSize: "12px", minWidth: "80px", display: "inline-flex", alignItems: "center", gap: "4px" }}
                           onClick={() => handleStartRecord(room.room_id)}
-                          title={isLive ? "立即开始录制当前直播" : "点击尝试录制（若主播未开播后端会提示）"}
+                          disabled={!isLive || recordLoading[room.room_id] === "starting"}
+                          title={isLive ? "立即开始录制当前直播" : "主播未开播，无法录制"}
                         >
-                          手动录制
+                          {recordLoading[room.room_id] === "starting" ? (
+                            <><LoadingIcon size={12} /> 启动中</>
+                          ) : isLive ? (
+                             "开始录制"
+                          ) : (
+                            "手动录制"
+                          )}
                         </button>
                       )}
                     </div>
@@ -468,7 +541,6 @@ function App() {
 
       {/* 底部固定状态栏 */}
       <StatusBar
-        ffmpegPath={config?.global.ffmpeg_path || ""}
         activeRecordingCount={activeTasks.length}
         monitoringCount={monitoringCount}
       />

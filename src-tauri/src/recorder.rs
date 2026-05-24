@@ -18,11 +18,13 @@ pub struct RecordProgress {
     pub bitrate: String,   // 格式：1500 kb/s
     pub status: String,    // "recording" | "stopped" | "error"
     pub error_msg: Option<String>,
+    pub title: String,     // 直播间标题
 }
 
 pub struct RecordTask {
     pub room_id: String,
     pub anchor_name: String,
+    pub title: String,     // 直播间标题
     pub child: Child,
     pub start_time: String,
 }
@@ -41,7 +43,7 @@ impl RecorderState {
 }
 
 static RE_PROGRESS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"size=\s*([0-9a-zA-Z\.]+)\s+time=\s*([0-9:\.]+)\s+bitrate=\s*([0-9\.]+[a-zA-Z\/]+)").unwrap());
-static RE_ERROR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)(error|failed|invalid|permission denied|connection refused|timeout|no such file|404|403|502|503)").unwrap());
+static RE_ERROR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)(error|failed|invalid|permission denied|connection refused|timeout|no such file|\b404\b|\b403\b|\b502\b|\b503\b)").unwrap());
 
 // 启动录制任务
 pub async fn start_recording(
@@ -49,6 +51,7 @@ pub async fn start_recording(
     state: tauri::State<'_, RecorderState>,
     room_id: String,
     anchor_name: String,
+    title: String,       // 新增：直播间标题
     stream_url: String,
     ffmpeg_path: String,
     save_dir: String,
@@ -172,6 +175,7 @@ pub async fn start_recording(
             let task = RecordTask {
                 room_id: room_id.clone(),
                 anchor_name: anchor_name.clone(),
+                title: title.clone(),
                 child,
                 start_time: Local::now().to_rfc3339(),
             };
@@ -179,6 +183,7 @@ pub async fn start_recording(
             
             // 启动异步任务监控进度（必须在 Ok 分支内）
             let room_id_clone = room_id.clone();
+            let title_clone = title.clone();
             let tasks_clone = state.tasks.clone();
             let app_clone = app.clone();
 
@@ -187,6 +192,7 @@ pub async fn start_recording(
                 
                 println!("[FFmpeg] 📡 开始监控 FFmpeg 输出 (PID: {})", room_id_clone);
                 let mut line_count = 0u64;
+                let mut last_error: Option<String> = None;
 
                 // 默认状态通知
                 let _ = app_clone.emit(
@@ -198,37 +204,24 @@ pub async fn start_recording(
                         bitrate: "0 kb/s".to_string(),
                         status: "recording".to_string(),
                         error_msg: None,
+                        title: title_clone.clone(),
                     },
                 );
 
                 while let Ok(Some(line)) = reader.next_line().await {
                     line_count += 1;
                     
-                    // 打印前 20 行和所有错误/警告行到终端
+                    // 打印前 20 行 and all error/warning lines to console
                     if line_count <= 20 || RE_ERROR.is_match(&line) || line.contains("Warning") || line.contains("warning") {
                         println!("[FFmpeg STDERR] [L{}] {}", line_count, 
                             if line.len() > 150 { format!("{}...", &line[..150]) } else { line.clone() }
                         );
                     }
                     
-                    // 检测是否包含错误信息
+                    // 检测是否包含错误信息并记录
                     if RE_ERROR.is_match(&line) {
                         eprintln!("[FFmpeg ❌ ERROR] [L{}] {}", line_count, line);
-                        
-                        // 发送错误事件给前端
-                        let _ = app_clone.emit(
-                            "record-progress",
-                            RecordProgress {
-                                room_id: room_id_clone.clone(),
-                                time: "00:00:00".to_string(),
-                                size: "0 B".to_string(),
-                                bitrate: "0 kb/s".to_string(),
-                                status: "error".to_string(),
-                                error_msg: Some(format!("FFmpeg Error: {}", 
-                                    if line.len() > 200 { &line[..200] } else { &line }
-                                )),
-                            },
-                        );
+                        last_error = Some(if line.len() > 200 { line[..200].to_string() } else { line.clone() });
                     }
                     
                     // 解析进度信息
@@ -258,6 +251,7 @@ pub async fn start_recording(
                                 bitrate,
                                 status: "recording".to_string(),
                                 error_msg: None,
+                                title: title_clone.clone(),
                             },
                         );
                     }
@@ -267,7 +261,7 @@ pub async fn start_recording(
                 println!("[FFmpeg] 📡 stderr 流已关闭 (共读取{}行)，等待进程完全退出...", line_count);
 
                 // ffmpeg 结束后的清理
-                // 1. 锁的粒度被降到最低：在独立作用域中移除任务，之后锁会被立即释放
+                // 1. 在独立作用域中移除任务，之后锁会被立即释放
                 let removed_task = {
                     let mut lock = tasks_clone.lock().await;
                     lock.remove(&room_id_clone)
@@ -275,10 +269,14 @@ pub async fn start_recording(
 
                 // 2. 在没有锁的情况下，安全地 await 等待子进程退出
                 if let Some(mut task) = removed_task {
-                    let status = match task.child.wait().await {
-                        Ok(status) if status.success() => "stopped".to_string(),
-                        Ok(_) => "stopped".to_string(),
-                        Err(_) => "error".to_string(),
+                    let exit_status = task.child.wait().await;
+                    let (status, err_msg) = match exit_status {
+                        Ok(status) if status.success() => ("stopped".to_string(), None),
+                        Ok(_) => (
+                            "error".to_string(), 
+                            Some(last_error.unwrap_or_else(|| "FFmpeg 进程异常退出，请检查网络或输入源".to_string()))
+                        ),
+                        Err(e) => ("error".to_string(), Some(format!("等待 FFmpeg 进程退出失败: {}", e))),
                     };
 
                     let _ = app_clone.emit(
@@ -289,7 +287,8 @@ pub async fn start_recording(
                             size: "0 B".to_string(),
                             bitrate: "0 kb/s".to_string(),
                             status,
-                            error_msg: None,
+                            error_msg: err_msg,
+                            title: task.title.clone(),
                         },
                     );
                 }
