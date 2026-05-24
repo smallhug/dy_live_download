@@ -1,6 +1,7 @@
 use crate::config::{load_config, RoomConfig};
 use crate::parser::parse_douyin_live;
 use crate::recorder::{start_recording, RecorderState};
+use log::{info, error};
 use std::time::Duration;
 use tauri::{AppHandle, Manager, Emitter};
 
@@ -97,20 +98,20 @@ pub fn start_monitor_loop(app: AppHandle) {
                                                     .await;
 
                                                     if let Err(e) = res {
-                                                        eprintln!("监控自动录制启动失败 ({}): {}", room_clone.anchor_name, e);
+                                                        error!("监控自动录制启动失败 ({}): {}", room_clone.anchor_name, e);
                                                     } else {
-                                                        println!("监控检测到开播，已自动启动录制: {}", info.anchor_name);
+                                                        info!("监控检测到开播，已自动启动录制: {}", info.anchor_name);
                                                     }
                                                 }
                                             }
                                         }
                                     } else {
-                                        println!("监控检测到开播，但未开启自动录制配置: {}", info.anchor_name);
+                                        info!("监控检测到开播，但未开启自动录制配置: {}", info.anchor_name);
                                     }
                                 }
                             }
                             Err(e) => {
-                                eprintln!("监控解析房间(ID: {}) 失败: {}", room_clone.room_id, e);
+                                error!("监控解析房间(ID: {}) 失败: {}", room_clone.room_id, e);
                             }
                         }
                     });

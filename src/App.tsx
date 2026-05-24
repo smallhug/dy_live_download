@@ -387,7 +387,7 @@ function App() {
                 style={{ height: "32px", padding: "0 12px", gap: "4px", fontSize: "12px", borderRadius: "6px" }}
               >
                 <PlusIcon size={13} />
-                添加主播
+                添加直播
               </button>
             </div>
           </header>

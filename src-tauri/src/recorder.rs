@@ -1,4 +1,5 @@
 use chrono::Local;
+use log::{info, warn, error};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -20,11 +21,8 @@ pub struct RecordProgress {
 }
 
 pub struct RecordTask {
-    pub room_id: String,
-    pub anchor_name: String,
-    pub title: String,     // 直播间标题
+    pub title: String,
     pub child: Child,
-    pub start_time: String,
 }
 
 // 全局录制状态管理器
@@ -140,16 +138,16 @@ pub async fn start_recording(
     }
 
     // 启动进程
-    println!("[FFmpeg] 准备启动 FFmpeg 进程...");
-    println!("[FFmpeg] 可执行文件: {}", ffmpeg_exe);
-    println!("[FFmpeg] 完整参数列表 (共{}个):", args.len());
+    info!("准备启动 FFmpeg 进程...");
+    info!("可执行文件: {}", ffmpeg_exe);
+    info!("完整参数列表 (共{}个):", args.len());
     for (idx, arg) in args.iter().enumerate() {
         // 隐藏敏感信息（URL 和 User-Agent）
         if arg.contains("http") || arg.contains("User-Agent") {
             let display = if arg.len() > 60 { format!("{}...", &arg[..60]) } else { arg.clone() };
-            println!("[FFmpeg]   [{}] {} (已截断)", idx, display);
+            info!("  [{}] {} (已截断)", idx, display);
         } else {
-            println!("[FFmpeg]   [{}] {}", idx, arg);
+            info!("  [{}] {}", idx, arg);
         }
     }
 
@@ -161,23 +159,21 @@ pub async fn start_recording(
 
     #[cfg(target_os = "windows")]
     {
+        #[allow(unused_imports)]
         use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        cmd.creation_flags(0x08000000);
     }
 
     match cmd.spawn() {
         Ok(mut child) => {
-            println!("[FFmpeg] ✅ FFmpeg 进程启动成功! PID: {:?}", child.id());
+            info!("FFmpeg 进程启动成功! PID: {:?}", child.id());
             
             let stderr = child.stderr.take().ok_or_else(|| "无法获取 FFmpeg stderr 流".to_string())?;
             
             // 存入任务列表
             let task = RecordTask {
-                room_id: room_id.clone(),
-                anchor_name: anchor_name.clone(),
                 title: title.clone(),
                 child,
-                start_time: Local::now().to_rfc3339(),
             };
             tasks.insert(room_id.clone(), task);
             
@@ -190,7 +186,7 @@ pub async fn start_recording(
             tauri::async_runtime::spawn(async move {
                 let mut reader = BufReader::new(stderr).lines();
                 
-                println!("[FFmpeg] 📡 开始监控 FFmpeg 输出 (PID: {})", room_id_clone);
+                info!("开始监控 FFmpeg 输出 (PID: {})", room_id_clone);
                 let mut line_count = 0u64;
                 let mut last_error: Option<String> = None;
 
@@ -214,14 +210,14 @@ pub async fn start_recording(
                     
                     // 打印前 20 行 and all error/warning lines to console
                     if line_count <= 20 || RE_ERROR.is_match(&line) || line.contains("Warning") || line.contains("warning") {
-                        println!("[FFmpeg STDERR] [L{}] {}", line_count, 
+                        warn!("FFmpeg STDERR [L{}] {}", line_count, 
                             if line.len() > 150 { format!("{}...", &line[..150]) } else { line.clone() }
                         );
                     }
                     
                     // 检测是否包含错误信息并记录
                     if RE_ERROR.is_match(&line) {
-                        eprintln!("[FFmpeg ❌ ERROR] [L{}] {}", line_count, line);
+                        error!("FFmpeg ERROR [L{}] {}", line_count, line);
                         last_error = Some(if line.len() > 200 { line[..200].to_string() } else { line.clone() });
                     }
                     
@@ -263,7 +259,7 @@ pub async fn start_recording(
                 }
                 
                 // stderr 流关闭（FFmpeg 进程退出）
-                println!("[FFmpeg] 📡 stderr 流已关闭 (共读取{}行)，等待进程完全退出...", line_count);
+                info!("stderr 流已关闭 (共读取{}行)，等待进程完全退出...", line_count);
 
                 // ffmpeg 结束后的清理
                 // 1. 在独立作用域中移除任务，之后锁会被立即释放
@@ -300,8 +296,8 @@ pub async fn start_recording(
             return Ok(());
         }
         Err(e) => {
-            let err_msg = format!("❌ 启动 FFmpeg 失败!\n   可执行文件: {}\n   错误原因: {}\n   请检查:\n   1. FFmpeg 路径是否正确\n   2. 文件是否存在\n   3. 是否有执行权限", ffmpeg_exe, e);
-            println!("{}", err_msg);
+            let err_msg = format!("启动 FFmpeg 失败! 可执行文件: {}, 错误原因: {}, 请检查: FFmpeg 路径是否正确、文件是否存在、是否有执行权限", ffmpeg_exe, e);
+            error!("{}", err_msg);
             return Err(err_msg);
         }
     }

@@ -52,11 +52,11 @@ fn find_room_node(val: &Value, require_stream: bool) -> Option<&Value> {
 // 映射画质名称为友好中文名称
 fn map_quality_name(key: &str) -> String {
     match key {
-        "ORIGIN" => "原画".to_string(),
-        "BLUE_LIGHT" | "BLUE" => "蓝光".to_string(),
-        "FULL_HD1" | "FULL_HD" => "超清".to_string(),
-        "HD1" | "HD" => "高清".to_string(),
-        "SD1" | "SD" => "标清".to_string(),
+        "ORIGIN" => "origin".to_string(),
+        "BLUE_LIGHT" | "BLUE" => "blue_ray".to_string(),
+        "FULL_HD1" | "FULL_HD" => "uhd".to_string(),
+        "HD1" | "HD" => "hd".to_string(),
+        "SD1" | "SD" => "sd".to_string(),
         other => other.to_string(),
     }
 }
@@ -334,12 +334,13 @@ pub async fn fetch_nickname_from_cookie(cookie: &str, user_agent: &str) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+    use log::info;
 
     #[tokio::test]
     async fn test_offline_room() {
         let room_id = "510200350291";
         let res = parse_douyin_live(room_id, "", "", "").await;
-        println!("Result: {:?}", res);
+        info!("Result: {:?}", res);
         assert!(res.is_ok());
         let info = res.unwrap();
         assert_eq!(info.is_live, false);

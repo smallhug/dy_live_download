@@ -29,4 +29,6 @@ regex = "1"
 chrono = { version = "0.4", features = ["serde"] }
 url = "2"
 sysinfo = "0.30"
+log = "0.4"
+simplelog = "0.12"
 

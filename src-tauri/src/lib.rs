@@ -3,11 +3,13 @@ mod parser;
 mod recorder;
 mod monitor;
 mod telemetry;
+mod logger;
 
 use config::{load_config, save_config, AppConfig, RoomConfig, CookieItem};
 use parser::{parse_douyin_live, LiveRoomInfo};
 use recorder::{get_active_recordings, start_recording, stop_recording, RecorderState};
 use serde::{Deserialize, Serialize};
+use log::{info, warn, error};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 // 1. 获取配置
@@ -113,8 +115,8 @@ async fn start_record_task(
     state: State<'_, RecorderState>,
     room_id: String,
 ) -> Result<(), String> {
-    println!("[🎬 录制] ========== 开始手动录制任务 ==========");
-    println!("[🎬 录制] room_id: {}", room_id);
+    info!("开始手动录制任务");
+    info!("room_id: {}", room_id);
 
     // 负载均衡选择并自增一个 Cookie 
     let cookie = get_and_increment_cookie(&app);
@@ -125,12 +127,12 @@ async fn start_record_task(
         .find(|r| r.room_id == room_id)
         .ok_or_else(|| "找不到该直播间配置".to_string())?;
 
-    println!("[🎬 录制] 主播: {}, 房间ID: {}", room.anchor_name, room.room_id);
+    info!("主播: {}, 房间ID: {}", room.anchor_name, room.room_id);
 
     // 开始解析流地址
     let info = parse_douyin_live(&room.room_id, &cookie, &config.global.user_agent, &config.global.sec_ch_ua).await?;
     
-    println!("[🎬 录制] 解析结果 - is_live: {}, streams数量: {}", info.is_live, info.streams.len());
+    info!("解析结果 - is_live: {}, streams数量: {}", info.is_live, info.streams.len());
     
     if !info.is_live {
         return Err("主播未开播，无法手动录制".to_string());
@@ -141,7 +143,8 @@ async fn start_record_task(
 
     // 打印所有可用的流
     for (idx, stream) in info.streams.iter().enumerate() {
-        println!("[🎬 录制] 流[{}]: 画质={}, FLV={}, M3U8={}", 
+        info!(
+            "流[{}]: 画质={}, FLV={}, M3U8={}", 
             idx, 
             stream.quality_name,
             stream.flv_url.as_ref().map(|s| if s.len() > 50 { &s[..50] } else { s.as_str() }).unwrap_or("无"),
@@ -157,7 +160,7 @@ async fn start_record_task(
         .or_else(|| info.streams.first())
         .ok_or_else(|| "无有效画质流".to_string())?;
 
-    println!("[🎬 录制] 选择流: 画质={}", selected_stream.quality_name);
+    info!("选择流: 画质={}", selected_stream.quality_name);
 
     // ✅ 优先使用 FLV 流（原始推流质量最高），M3U8 是转码后的低质量流
     let stream_url = selected_stream
@@ -166,11 +169,11 @@ async fn start_record_task(
         .or_else(|| selected_stream.m3u8_url.clone())
         .ok_or_else(|| "无可用推流地址（FLV和M3U8都为空）".to_string())?;
 
-    println!("[🎬 录制] 最终使用URL: {}...", 
+    info!("最终使用URL: {}...", 
         if stream_url.len() > 80 { &stream_url[..80] } else { &stream_url }
     );
 
-    println!("[🎬 录制] 调用 start_recording...");
+    info!("调用 start_recording...");
     start_recording(
         app,
         state,
@@ -185,7 +188,7 @@ async fn start_record_task(
     )
     .await?;
 
-    println!("[🎬 录制] ✅ 录制任务启动成功！");
+    info!("录制任务启动成功");
     Ok(())
 }
 
@@ -221,24 +224,24 @@ async fn get_active_task_titles(
 async fn capture_login_cookies(app: AppHandle) -> Result<String, String> {
     use url::Url;
 
-    println!("[Login Assistant Debug] Attempting to capture cookies (async version)...");
+    info!("尝试捕获登录 Cookie (async 版本)");
     // 获取名为 "douyin-login" 的子窗口
     if let Some(window) = app.get_webview_window("douyin-login") {
         let target_url = Url::parse("https://www.douyin.com")
             .map_err(|e| {
                 let err_msg = format!("解析抖音域名URL失败: {}", e);
-                println!("[Login Assistant Error] {}", err_msg);
+                error!("{}", err_msg);
                 err_msg
             })?;
 
-        println!("[Login Assistant Debug] Retrieving cookies for target URL: {} (async)", target_url);
+        info!("正在为目标 URL 获取 Cookie: {} (async)", target_url);
         // 提取该 WebView 底层的 Cookie 存储（async 命令中调用是安全的）
         match window.cookies_for_url(target_url) {
             Ok(cookies) => {
-                println!("[Login Assistant Debug] Successfully called cookies_for_url. Total cookies count: {}", cookies.len());
+                info!("cookies_for_url 调用成功，Cookie 总数: {}", cookies.len());
                 for (idx, c) in cookies.iter().enumerate() {
-                    println!(
-                        "[Login Assistant Cookie Info {}] Name: {}, Value Length: {}, Domain: {:?}, Secure: {:?}, HttpOnly: {:?}",
+                    info!(
+                        "Cookie[{}] Name: {}, Value Length: {}, Domain: {:?}, Secure: {:?}, HttpOnly: {:?}",
                         idx + 1,
                         c.name(),
                         c.value().len(),
@@ -255,21 +258,21 @@ async fn capture_login_cookies(app: AppHandle) -> Result<String, String> {
                     .join("; ");
 
                 if cookie_str.contains("sessionid") || cookie_str.contains("passport_csrf_token") {
-                    println!("[Login Assistant Debug] Found critical session cookies (sessionid/passport_csrf_token). Capture success!");
+                    info!("检测到关键会话 Cookie (sessionid/passport_csrf_token)，捕获成功");
                     Ok(cookie_str)
                 } else {
-                    println!("[Login Assistant Warning] Cookies captured, but missing critical 'sessionid' or 'passport_csrf_token'. User might not have completed login/verification.");
+                    warn!("Cookie 已捕获，但缺少关键的 sessionid 或 passport_csrf_token，用户可能未完成登录验证");
                     Err("未在子窗口中检测到您的抖音登录信息，请确保您在扫码助手窗口中已经完成了验证和登录！".to_string())
                 }
             }
             Err(e) => {
                 let err_msg = format!("从底层 WebView 获取 Cookie 失败: {}", e);
-                println!("[Login Assistant Error] {}", err_msg);
+                error!("{}", err_msg);
                 Err(err_msg)
             }
         }
     } else {
-        println!("[Login Assistant Error] The 'douyin-login' window instance does not exist in Manager.");
+        error!("douyin-login 窗口实例不存在");
         Err("登录助手窗口未打开。请先点击【开启扫码登录助手】按钮拉起窗口！".to_string())
     }
 }
@@ -341,7 +344,7 @@ async fn convert_video(
     use tokio::process::Command;
     use regex::Regex;
 
-    println!("[转换] 任务 {} 开始: {} → {}", task_id, input_path, output_path);
+    info!("转换任务 {} 开始: {} → {}", task_id, input_path, output_path);
 
     // 校验输入文件
     if !Path::new(&input_path).exists() {
@@ -372,6 +375,7 @@ async fn convert_video(
             .stderr(Stdio::piped());
         #[cfg(target_os = "windows")]
         {
+            #[allow(unused_imports)]
             use std::os::windows::process::CommandExt;
             probe_cmd.creation_flags(0x08000000);
         }
@@ -391,7 +395,7 @@ async fn convert_video(
             0.0
         }
     };
-    println!("[转换] 探测总时长: {:.1}s", duration_secs);
+    info!("探测总时长: {:.1}s", duration_secs);
 
     // 构建转换参数
     let mut args = vec![
@@ -426,6 +430,7 @@ async fn convert_video(
         .stdin(Stdio::null());
     #[cfg(target_os = "windows")]
     {
+        #[allow(unused_imports)]
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x08000000);
     }
@@ -466,7 +471,7 @@ async fn convert_video(
             }
             // 错误检测
             if re_error.is_match(&line) && !line.contains("speed") {
-                eprintln!("[转换 ERROR] {}", line);
+                error!("转换错误: {}", line);
                 last_error = Some(line.clone());
             }
 
@@ -525,7 +530,7 @@ async fn convert_video(
             },
         );
 
-        println!("[转换] 任务 {} 结束 (exit_ok={})", task_id_clone, exit_ok);
+        info!("转换任务 {} 结束 (exit_ok={})", task_id_clone, exit_ok);
     });
 
     Ok(())
@@ -610,13 +615,14 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(RecorderState::new()) // 注入全局录制状态管理器
+        .manage(RecorderState::new())
         .setup(|app| {
-            // 启动后台监控循环
             let app_handle = app.handle().clone();
-            monitor::start_monitor_loop(app_handle.clone());
 
-            // 启动性能遥测循环
+            logger::init_logger(&app_handle);
+            info!("应用启动");
+
+            monitor::start_monitor_loop(app_handle.clone());
             telemetry::start_telemetry_loop(app_handle);
             Ok(())
         })

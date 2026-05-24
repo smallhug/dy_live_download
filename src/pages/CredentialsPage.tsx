@@ -251,47 +251,39 @@ export default function CredentialsPage({ config, onSaveCookies }: CredentialsPa
         </div>
       </div>
 
+      {/* 手动导入弹窗 */}
       {showManualInput && (
-        <div className="manual-import-box glass-card">
-          <h4>手动导入 Cookie 凭证</h4>
-          {manualError && <div className="form-error">{manualError}</div>}
-          <div style={{ display: "flex", gap: "12px", marginBottom: "12px" }}>
-            <div style={{ flex: 1 }}>
-              <label style={{ fontSize: "11px", fontWeight: "600", color: "#64748b", marginBottom: "4px", display: "block" }}>账号备注或昵称</label>
-              <input 
-                type="text" 
-                placeholder="例如: 抖音主号1" 
-                value={manualNickname}
-                onChange={(e) => setManualNickname(e.target.value)}
-                style={{ fontSize: "12px", padding: "8px 10px", width: "100%", borderRadius: "6px", border: "1px solid #cbd5e1" }}
-              />
+        <div className="modal-overlay" onClick={() => setShowManualInput(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>手动导入 Cookie</h2>
+              <button className="close-btn" onClick={() => setShowManualInput(false)}>&times;</button>
             </div>
-          </div>
-          <div style={{ marginBottom: "12px" }}>
-            <label style={{ fontSize: "11px", fontWeight: "600", color: "#64748b", marginBottom: "4px", display: "block" }}>Cookie 字符串值</label>
-            <textarea 
-              placeholder="直接复制粘贴抓取到的完整的 Cookie 字段值" 
-              value={manualCookieValue}
-              onChange={(e) => setManualCookieValue(e.target.value)}
-              rows={3}
-              style={{ fontSize: "11px", padding: "8px 10px", width: "100%", borderRadius: "6px", border: "1px solid #cbd5e1", resize: "vertical", fontFamily: "monospace" }}
-            />
-          </div>
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px" }}>
-            <button 
-              type="button" 
-              onClick={() => setShowManualInput(false)}
-              className="btn btn-secondary btn-sm"
-            >
-              取消
-            </button>
-            <button 
-              type="button" 
-              onClick={handleAddManualCookie}
-              className="btn btn-primary btn-sm"
-            >
-              确认导入
-            </button>
+            <div className="modal-form">
+              {manualError && <div className="form-error">{manualError}</div>}
+              <div className="form-group">
+                <label>账号备注或昵称</label>
+                <input
+                  type="text"
+                  placeholder="例如: 抖音主号1"
+                  value={manualNickname}
+                  onChange={(e) => setManualNickname(e.target.value)}
+                />
+              </div>
+              <div className="form-group">
+                <label>Cookie 字符串值</label>
+                <textarea
+                  placeholder="直接复制粘贴抓取到的完整的 Cookie 字段值"
+                  value={manualCookieValue}
+                  onChange={(e) => setManualCookieValue(e.target.value)}
+                  style={{ fontFamily: "monospace", fontSize: "12px", height: "100px", resize: "none", scrollbarWidth: "none" }}
+                />
+              </div>
+              <div className="modal-actions">
+                <button className="btn btn-secondary" onClick={() => setShowManualInput(false)}>取消</button>
+                <button className="btn btn-primary" onClick={handleAddManualCookie}>确认导入</button>
+              </div>
+            </div>
           </div>
         </div>
       )}
