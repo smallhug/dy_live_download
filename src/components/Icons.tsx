@@ -183,25 +183,6 @@ export const CameraIcon: React.FC<IconProps> = ({ size = 16, style, ...props }) 
   </svg>
 );
 
-// 🎤 (主播名 / 麦克风)
-export const MicIcon: React.FC<IconProps> = ({ size = 16, style, ...props }) => (
-  <svg
-    width={size}
-    height={size}
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth={2}
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    style={{ display: "inline-block", verticalAlign: "middle", ...style }}
-    {...props}
-  >
-    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-    <path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8" />
-  </svg>
-);
-
 // 🔑 (Cookie 助手 / 钥匙)
 export const KeyIcon: React.FC<IconProps> = ({ size = 16, style, ...props }) => (
   <svg
@@ -285,25 +266,6 @@ export const CheckIcon: React.FC<IconProps> = ({ size = 16, style, ...props }) =
     {...props}
   >
     <polyline points="20 6 9 17 4 12" />
-  </svg>
-);
-
-// ❌ (失败 / 关闭)
-export const CloseIcon: React.FC<IconProps> = ({ size = 16, style, ...props }) => (
-  <svg
-    width={size}
-    height={size}
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth={2.5}
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    style={{ display: "inline-block", verticalAlign: "middle", ...style }}
-    {...props}
-  >
-    <line x1="18" y1="6" x2="6" y2="18" />
-    <line x1="6" y1="6" x2="18" y2="18" />
   </svg>
 );
 

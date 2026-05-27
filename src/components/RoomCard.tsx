@@ -23,7 +23,7 @@ interface RoomCardProps {
   onSettings: () => void;
 }
 
-export const RoomCard: React.FC<RoomCardProps> = ({
+export const RoomCard: React.FC<RoomCardProps> = React.memo(({
   room,
   isLive,
   title,
@@ -115,7 +115,7 @@ export const RoomCard: React.FC<RoomCardProps> = ({
 
         {/* 参数展示面板 (画质、分段时间、录制时间) */}
         <div className="progress-panel" style={{ marginTop: "4px" }}>
-          <div className="progress-grid" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "8px" }}>
+          <div className="progress-grid">
             <div className="progress-stat">
               <span className="stat-label">画质</span>
               <span className="stat-value" style={{ fontSize: "11.5px", fontWeight: "600" }}>
@@ -199,4 +199,4 @@ export const RoomCard: React.FC<RoomCardProps> = ({
       </div>
     </div>
   );
-};
+});

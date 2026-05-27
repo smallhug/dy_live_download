@@ -11,14 +11,12 @@ interface SettingsPageProps {
 
 export default function SettingsPage({ config, onSave, showAlert }: SettingsPageProps) {
   const [settingsSaveDir, setSettingsSaveDir] = useState("");
-  const [settingsFFmpegPath, setSettingsFFmpegPath] = useState("");
   const [settingsMonitorInterval, setSettingsMonitorInterval] = useState(60);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
 
   useEffect(() => {
     if (config?.global) {
       setSettingsSaveDir(config.global.save_dir);
-      setSettingsFFmpegPath(config.global.ffmpeg_path);
       setSettingsMonitorInterval(config.global.monitor_interval_secs);
     }
   }, [config]);
@@ -44,7 +42,7 @@ export default function SettingsPage({ config, onSave, showAlert }: SettingsPage
     try {
       await onSave({
         save_dir: settingsSaveDir,
-        ffmpeg_path: settingsFFmpegPath,
+        ffmpeg_path: config?.global.ffmpeg_path ?? "",
         monitor_interval_secs: settingsMonitorInterval,
       });
       await showAlert("设置保存成功并已立即生效！", "系统设置", "info");
@@ -100,7 +98,7 @@ export default function SettingsPage({ config, onSave, showAlert }: SettingsPage
             <input
               type="number"
               value={settingsMonitorInterval}
-              onChange={(e) => setSettingsMonitorInterval(parseInt(e.target.value) || 60)}
+              onChange={(e) => setSettingsMonitorInterval(Math.max(10, Math.min(3600, parseInt(e.target.value) || 60)))}
               min={10}
               max={3600}
               required

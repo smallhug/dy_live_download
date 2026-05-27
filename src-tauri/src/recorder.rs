@@ -155,7 +155,7 @@ pub async fn start_recording(
     for (idx, arg) in args.iter().enumerate() {
         // 隐藏敏感信息（URL 和 User-Agent）
         if arg.contains("http") || arg.contains("User-Agent") {
-            let display = if arg.len() > 60 { format!("{}...", &arg[..60]) } else { arg.clone() };
+            let display = if arg.chars().count() > 60 { format!("{}...", arg.chars().take(60).collect::<String>()) } else { arg.clone() };
             info!("  [{}] {} (已截断)", idx, display);
         } else {
             info!("  [{}] {}", idx, arg);
@@ -222,7 +222,7 @@ pub async fn start_recording(
                     // 打印前 20 行 and all error/warning lines to console
                     if line_count <= 20 || RE_ERROR.is_match(&line) || line.contains("Warning") || line.contains("warning") {
                         warn!("FFmpeg STDERR [L{}] {}", line_count, 
-                            if line.len() > 150 { format!("{}...", &line[..150]) } else { line.clone() }
+                            if line.chars().count() > 150 { format!("{}...", line.chars().take(150).collect::<String>()) } else { line.clone() }
                         );
                     }
                     

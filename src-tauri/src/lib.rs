@@ -10,6 +10,13 @@ use parsers::LiveRoomInfo;
 use recorder::{get_active_recordings, start_recording, stop_recording, RecorderState};
 use serde::{Deserialize, Serialize};
 use log::{info, warn, error};
+
+fn truncate_str(s: &str, max_chars: usize) -> &str {
+    match s.char_indices().nth(max_chars) {
+        Some((idx, _)) => &s[..idx],
+        None => s,
+    }
+}
 use tauri::{AppHandle, Emitter, Manager, State};
 
 // 1. 获取配置
@@ -77,7 +84,7 @@ async fn add_room(
         is_monitoring,
         preferred_quality,
         segment_duration_mins,
-        auto_record: false,
+        auto_record: true,
         platform: platform_str,
     };
 
@@ -152,8 +159,8 @@ async fn start_record_task(
             "流[{}]: 画质={}, FLV={}, M3U8={}", 
             idx, 
             stream.quality_name,
-            stream.flv_url.as_ref().map(|s| if s.len() > 50 { &s[..50] } else { s.as_str() }).unwrap_or("无"),
-            stream.m3u8_url.as_ref().map(|s| if s.len() > 50 { &s[..50] } else { s.as_str() }).unwrap_or("无")
+            stream.flv_url.as_ref().map(|s| truncate_str(s, 50)).unwrap_or("无"),
+            stream.m3u8_url.as_ref().map(|s| truncate_str(s, 50)).unwrap_or("无")
         );
     }
 
@@ -170,9 +177,7 @@ async fn start_record_task(
         .or_else(|| selected_stream.m3u8_url.clone())
         .ok_or_else(|| "无可用推流地址（FLV和M3U8都为空）".to_string())?;
 
-    info!("最终使用URL: {}...", 
-        if stream_url.len() > 80 { &stream_url[..80] } else { &stream_url }
-    );
+    info!("最终使用URL: {}...", truncate_str(&stream_url, 80));
 
     info!("调用 start_recording...");
     start_recording(

@@ -25,15 +25,17 @@ interface ConvertTask {
   taskId: string;
   inputPath: string;
   outputPath: string;
-  progress: {
-    task_id: string;
-    status: "running" | "done" | "error";
-    percent: number;
-    time: string;
-    speed: string;
-    error_msg?: string;
-    output_path: string;
-  } | null;
+  progress: ConvertProgressPayload | null;
+}
+
+interface ConvertProgressPayload {
+  task_id: string;
+  status: "running" | "done" | "error";
+  percent: number;
+  time: string;
+  speed: string;
+  error_msg?: string;
+  output_path: string;
 }
 
 function guessOutputPath(inputPath: string, ext: string, saveDir: string): string {
@@ -47,8 +49,11 @@ function guessOutputPath(inputPath: string, ext: string, saveDir: string): strin
   return `${dir}${dirSep}${basename}_converted.${ext}`;
 }
 
-export default function ConverterPage() {
-  const [config, setConfig] = useState<AppConfig | null>(null);
+interface ConverterPageProps {
+  config: AppConfig | null;
+}
+
+export default function ConverterPage({ config }: ConverterPageProps) {
   const [convertInputPath, setConvertInputPath] = useState("");
   const [convertOutputExt, setConvertOutputExt] = useState("mp4");
   const [convertOutputPath, setConvertOutputPath] = useState("");
@@ -56,17 +61,7 @@ export default function ConverterPage() {
   const [isConverting, setIsConverting] = useState(false);
 
   useEffect(() => {
-    const fetchConfig = async () => {
-      try {
-        const res = await invoke<AppConfig>("get_config");
-        setConfig(res);
-      } catch (err) {
-        console.error("加载配置失败:", err);
-      }
-    };
-    fetchConfig();
-
-    const unlistenConvert = listen<any>("convert-progress", (event) => {
+    const unlistenConvert = listen<ConvertProgressPayload>("convert-progress", (event) => {
       const p = event.payload;
       setConvertTasks((prev) =>
         prev.map((t) =>

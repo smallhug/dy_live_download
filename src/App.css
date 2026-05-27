@@ -215,19 +215,6 @@ body {
   align-items: center;
 }
 
-.live-control-badge {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.8px;
-  color: #10b981;
-  background-color: #d1fae5;
-  padding: 4px 8px;
-  border-radius: 6px;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
 .bar-center {
   flex: 1;
   max-width: 480px;
@@ -256,54 +243,10 @@ body {
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.06);
 }
 
-.search-placeholder {
-  font-size: 13px;
-  font-weight: 500;
-  color: #94a3b8;
-}
-
 .bar-right {
   display: flex;
   align-items: center;
   gap: 12px;
-}
-
-.bar-status-badge {
-  font-size: 12px;
-  font-weight: 500;
-  color: #64748b;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.pulse-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background-color: currentColor;
-}
-
-.pulse-dot.green {
-  background-color: #10b981;
-  animation: pulse-badge 2s infinite;
-}
-
-@keyframes pulse-badge {
-  0% {
-    transform: scale(0.95);
-    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5);
-  }
-
-  70% {
-    transform: scale(1);
-    box-shadow: 0 0 0 5px rgba(16, 185, 129, 0);
-  }
-
-  100% {
-    transform: scale(0.95);
-    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
-  }
 }
 
 /* 中间主内容页面区 */
@@ -604,18 +547,6 @@ body {
   border: 1px solid #f1f5f9;
 }
 
-.progress-title {
-  font-size: 11px;
-  text-transform: uppercase;
-  color: #ef4444;
-  font-weight: 600;
-  letter-spacing: 0.5px;
-  margin-bottom: 6px;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-
 .progress-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -658,72 +589,6 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-}
-
-/* 开关样式 */
-.switch-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: #64748b;
-  cursor: pointer;
-}
-
-.switch-input {
-  position: absolute;
-  opacity: 0;
-  width: 0;
-  height: 0;
-  margin: 0;
-  pointer-events: none;
-}
-
-.switch-slider {
-  width: 32px;
-  height: 16px;
-  background-color: #cbd5e1;
-  border-radius: 20px;
-  position: relative;
-  transition: background-color 0.2s;
-}
-
-.switch-slider::before {
-  content: "";
-  position: absolute;
-  width: 12px;
-  height: 12px;
-  left: 2px;
-  bottom: 2px;
-  background-color: #ffffff;
-  border-radius: 50%;
-  transition: transform 0.2s;
-}
-
-.switch-input:checked+.switch-slider {
-  background-color: #2563eb;
-}
-
-.switch-input:checked+.switch-slider::before {
-  transform: translateX(16px);
-}
-
-/* 画质选择 Select */
-.quality-select {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  color: #334155;
-  font-family: inherit;
-  font-size: 12px;
-  padding: 3px 6px;
-  outline: none;
-  cursor: pointer;
-  transition: border-color 0.2s;
-}
-
-.quality-select:hover {
-  border-color: #cbd5e1;
 }
 
 /* 图标按钮 */
@@ -805,22 +670,6 @@ body {
 .page-section-header .action-buttons {
   display: flex;
   gap: 8px;
-}
-
-.manual-import-box {
-  background-color: #ffffff;
-  padding: 16px;
-  border-radius: 8px;
-  border: 1px solid #e2e8f0;
-  margin-bottom: 20px;
-  animation: slideDown 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.manual-import-box h4 {
-  font-size: 13px;
-  font-weight: 600;
-  color: #0f172a;
-  margin-bottom: 10px;
 }
 
 .table-wrapper {
@@ -1112,85 +961,11 @@ body {
   color: #94a3b8;
 }
 
-/* 复选框容器 */
-.checkbox-group {
-  justify-content: center;
-}
-
-.checkbox-label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: #334155;
-  cursor: pointer;
-  margin-top: 10px;
-}
-
-.checkbox-label input[type="checkbox"] {
-  width: 15px;
-  height: 15px;
-  accent-color: #2563eb;
-  cursor: pointer;
-}
-
 .modal-actions {
   display: flex;
   justify-content: flex-end;
   gap: 12px;
   margin-top: 8px;
-}
-
-/* 高级设置折叠面板 */
-.advanced-settings-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 10px 14px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  cursor: pointer;
-  margin-top: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  color: #2563eb;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.advanced-settings-header:hover {
-  background: #f1f5f9;
-  border-color: #cbd5e1;
-}
-
-.advanced-settings-content {
-  padding: 16px;
-  border: 1px solid #e2e8f0;
-  border-top: none;
-  border-radius: 0 0 8px 8px;
-  background: #ffffff;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin-top: -9px;
-  animation: slideDown 0.2s ease-out;
-}
-
-@keyframes slideDown {
-  from {
-    opacity: 0;
-    transform: translateY(-8px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-/* ── 平台卡片水印背景 ────────────────────────────────────────── */
-.room-card {
-  position: relative;
 }
 
 .card-platform-watermark {

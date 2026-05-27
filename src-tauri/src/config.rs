@@ -145,16 +145,20 @@ pub fn load_config(app: &AppHandle) -> AppConfig {
     };
 
     // 自动补充默认值 (如果为空，或者配置的 FFmpeg 路径在本地已不复存在，则重新检测内置打包的)
+    let mut modified = false;
     let path_invalid = !config.global.ffmpeg_path.is_empty() && !Path::new(&config.global.ffmpeg_path).exists();
     if config.global.ffmpeg_path.is_empty() || path_invalid {
         config.global.ffmpeg_path = detect_ffmpeg_path(app);
+        modified = true;
     }
     if config.global.save_dir.is_empty() {
         config.global.save_dir = detect_save_dir(app);
+        modified = true;
     }
 
-    // 自动同步写回，保存推导出来的默认值
-    let _ = save_config(app, &config);
+    if modified {
+        let _ = save_config(app, &config);
+    }
 
     config
 }

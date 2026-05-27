@@ -87,7 +87,8 @@ export default function CredentialsPage({ config, onSaveCookies }: CredentialsPa
             setLoginPollTimer(null);
             await finishLoginFlow(platform);
           }
-        } catch {
+        } catch (err) {
+          console.warn("轮询登录状态失败:", err);
         }
       }, 2000);
       setLoginPollTimer(timer);
@@ -106,7 +107,9 @@ export default function CredentialsPage({ config, onSaveCookies }: CredentialsPa
       const windowLabel = activeLoginPlatform === "bilibili" ? "bilibili-login" : "douyin-login";
       const loginWin = await WebviewWindow.getByLabel(windowLabel);
       if (loginWin) await loginWin.close();
-    } catch {}
+    } catch (err) {
+      console.warn("关闭登录窗口失败:", err);
+    }
     setLoginFlow("idle");
     setLoginFlowMsg("");
   };
@@ -144,7 +147,9 @@ export default function CredentialsPage({ config, onSaveCookies }: CredentialsPa
       const windowLabel = activeLoginPlatform === "bilibili" ? "bilibili-login" : "douyin-login";
       const loginWin = await WebviewWindow.getByLabel(windowLabel);
       if (loginWin) await loginWin.close();
-    } catch {}
+    } catch (err) {
+      console.warn("关闭登录窗口失败:", err);
+    }
 
     const acquiredAt = formatDateTime(new Date());
 
@@ -158,7 +163,13 @@ export default function CredentialsPage({ config, onSaveCookies }: CredentialsPa
     };
 
     const currentCookies = config?.global.cookies || [];
-    await onSaveCookies([...currentCookies, newCookie]);
+    try {
+      await onSaveCookies([...currentCookies, newCookie]);
+    } catch (err) {
+      console.error("保存凭证失败:", err);
+      alert("保存凭证失败: " + err);
+      return;
+    }
     setShowNicknameModal(false);
     setPendingCookie(null);
     setPendingNickname("");

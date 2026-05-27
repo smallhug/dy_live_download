@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { AppConfig, RoomConfig, RecordProgress, LiveRoomInfo, TelemetryPayload } from "./types";
+import { AppConfig, GlobalConfig, RoomConfig, RecordProgress, LiveRoomInfo, TelemetryPayload } from "./types";
 import { AddRoomModal } from "./components/AddRoomModal";
 import { RoomSettingsModal } from "./components/RoomSettingsModal";
 import { DialogModal, DialogOptions } from "./components/DialogModal";
@@ -19,12 +19,20 @@ import {
 } from "./components/Icons";
 import "./App.css";
 
+const Clock: React.FC = () => {
+  const [time, setTime] = useState(formatDateTime(new Date()));
+  useEffect(() => {
+    const timer = setInterval(() => setTime(formatDateTime(new Date())), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  return <>{time}</>;
+};
+
 function App() {
   // ── 核心框架状态 ──────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<"dashboard" | "credentials" | "converter" | "settings">("dashboard");
   const [searchQuery, setSearchQuery] = useState("");
-  const [currentTime, setCurrentTime] = useState("");
-  const [telemetry, setTelemetry] = useState<TelemetryPayload>({ cpu_usage: 0.0, net_recv: 0, net_sent: 0 });
+  const [telemetry, setTelemetry] = useState<TelemetryPayload>({ cpu_usage: 0, net_recv: 0, net_sent: 0 });
 
   // ── 系统设置与大盘原有状态 ──────────────────────────────────────────
   const [config, setConfig] = useState<AppConfig | null>(null);
@@ -59,16 +67,6 @@ function App() {
   const [roomStatuses, setRoomStatuses] = useState<Record<string, { is_live: boolean; title?: string }>>({});
   const [checkingRooms, setCheckingRooms] = useState<Record<string, boolean>>({});
   const [recordLoading, setRecordLoading] = useState<Record<string, "starting" | "stopping" | null>>({});
-
-  // ── 系统时间定时器 ─────────────────────────────────────────────
-  useEffect(() => {
-    const updateTime = () => {
-      setCurrentTime(formatDateTime(new Date()));
-    };
-    updateTime();
-    const timer = setInterval(updateTime, 1000);
-    return () => clearInterval(timer);
-  }, []);
 
   // ── 获取全局配置 ──────────────────────────────────────────────
   const fetchConfig = async () => {
@@ -272,7 +270,7 @@ function App() {
     setRecordLoading((prev) => ({ ...prev, [roomId]: "stopping" }));
     try {
       await invoke("stop_record_task", { roomId });
-      fetchActiveTasks();
+      await fetchActiveTasks();
     } catch (err) {
       alertAsync("停止录制失败: " + err, "错误", "error");
     } finally {
@@ -280,7 +278,7 @@ function App() {
     }
   };
 
-  const handleSaveGlobalConfig = async (patch: Partial<any>) => {
+  const handleSaveGlobalConfig = async (patch: Partial<GlobalConfig>) => {
     if (!config?.global) return;
     try {
       const fullConfig = {
@@ -307,15 +305,17 @@ function App() {
   };
 
   // ── 过滤搜索主播卡片 ────────────────────────────────────────────
-  const filteredRooms = config?.rooms.filter(room => {
-    const status = roomStatuses[room.room_id];
-    const query = searchQuery.trim().toLowerCase();
-    if (!query) return true;
-    const nameMatch = room.anchor_name.toLowerCase().includes(query);
-    const titleMatch = status?.title?.toLowerCase().includes(query) || false;
-    const idMatch = room.room_id.includes(query);
-    return nameMatch || titleMatch || idMatch;
-  }) || [];
+  const filteredRooms = useMemo(() => {
+    return config?.rooms.filter(room => {
+      const status = roomStatuses[room.room_id];
+      const query = searchQuery.trim().toLowerCase();
+      if (!query) return true;
+      const nameMatch = room.anchor_name.toLowerCase().includes(query);
+      const titleMatch = status?.title?.toLowerCase().includes(query) || false;
+      const idMatch = room.room_id.includes(query);
+      return nameMatch || titleMatch || idMatch;
+    }) || [];
+  }, [config?.rooms, roomStatuses, searchQuery]);
 
   return (
     <div className="app-layout">
@@ -423,7 +423,7 @@ function App() {
           )}
 
           {activeTab === "converter" && (
-            <ConverterPage />
+            <ConverterPage config={config} />
           )}
 
           {activeTab === "settings" && (
@@ -464,7 +464,7 @@ function App() {
             </span>
             <span className="telemetry-divider">|</span>
             <span className="telemetry-item time-display">
-              {currentTime}
+              <Clock />
             </span>
           </div>
         </footer>
