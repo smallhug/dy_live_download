@@ -1,14 +1,15 @@
 import { useState, useEffect } from "react";
-import { message, open as openDialog } from "@tauri-apps/plugin-dialog";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { AppConfig } from "../types";
 import { FolderIcon, TimerIcon, LoadingIcon, CheckIcon } from "../components/Icons";
 
 interface SettingsPageProps {
   config: AppConfig | null;
   onSave: (data: { save_dir: string; ffmpeg_path: string; monitor_interval_secs: number }) => Promise<void>;
+  showAlert: (message: string, title?: string, kind?: "info" | "error" | "warning") => Promise<boolean>;
 }
 
-export default function SettingsPage({ config, onSave }: SettingsPageProps) {
+export default function SettingsPage({ config, onSave, showAlert }: SettingsPageProps) {
   const [settingsSaveDir, setSettingsSaveDir] = useState("");
   const [settingsFFmpegPath, setSettingsFFmpegPath] = useState("");
   const [settingsMonitorInterval, setSettingsMonitorInterval] = useState(60);
@@ -46,9 +47,9 @@ export default function SettingsPage({ config, onSave }: SettingsPageProps) {
         ffmpeg_path: settingsFFmpegPath,
         monitor_interval_secs: settingsMonitorInterval,
       });
-      await message("设置保存成功并已立即生效！", { title: "系统设置", kind: "info" });
+      await showAlert("设置保存成功并已立即生效！", "系统设置", "info");
     } catch (err) {
-      await message("保存设置失败: " + err, { title: "系统设置", kind: "error" });
+      await showAlert("保存设置失败: " + err, "系统设置", "error");
     } finally {
       setIsSavingSettings(false);
     }

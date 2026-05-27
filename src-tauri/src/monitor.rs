@@ -48,10 +48,11 @@ pub fn start_monitor_loop(app: AppHandle) {
                     let global_clone = global.clone();
 
                     // 异步拉起检测，防止阻塞其他房间检测
+                    let cookie = crate::get_and_increment_cookie(&app_clone);
                     tauri::async_runtime::spawn(async move {
                         match parse_douyin_live(
                             &room_clone.room_id,
-                            "",  // 状态检测不携带 Cookie，降低凭据泄露风险
+                            &cookie,  // 使用已保存的 Cookie 进行状态检测以防止滑块拦截
                             &global_clone.user_agent,
                             &global_clone.sec_ch_ua,
                         )
@@ -67,12 +68,8 @@ pub fn start_monitor_loop(app: AppHandle) {
 
                                 if info.is_live && !info.streams.is_empty() {
                                     if room_clone.auto_record {
-                                        // 查找画质匹配
-                                        let selected_stream = info
-                                            .streams
-                                            .iter()
-                                            .find(|s| s.quality_name == room_clone.preferred_quality)
-                                            .or_else(|| info.streams.first());
+                                         // 查找画质匹配（使用智能降级匹配逻辑）
+                                         let selected_stream = crate::parser::select_best_stream(&info.streams, &room_clone.preferred_quality);
 
                                         if let Some(stream) = selected_stream {
                                             // 优先采用 flv 地址，其次为 m3u8（与手动录制逻辑一致）

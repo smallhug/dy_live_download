@@ -39,12 +39,12 @@ fn update_global_config(
     save_config(&app, &config)
 }
 
-// 3. 解析直播间基本信息（仅用于手动状态检测，不携带 Cookie）
+// 3. 解析直播间基本信息（用于手动状态检测，使用 Cookie 以防滑块拦截）
 #[tauri::command]
 async fn parse_room(app: AppHandle, url: String) -> Result<LiveRoomInfo, String> {
+    let cookie = get_and_increment_cookie(&app);
     let config = load_config(&app);
-    // 状态检测不需要 Cookie，传入空字符串以避免泄露登录凭据
-    parse_douyin_live(&url, "", &config.global.user_agent, &config.global.sec_ch_ua).await
+    parse_douyin_live(&url, &cookie, &config.global.user_agent, &config.global.sec_ch_ua).await
 }
 
 // 4. 添加直播间
@@ -152,12 +152,8 @@ async fn start_record_task(
         );
     }
 
-    // 匹配首选画质
-    let selected_stream = info
-        .streams
-        .iter()
-        .find(|s| s.quality_name == room.preferred_quality)
-        .or_else(|| info.streams.first())
+    // 匹配首选画质（使用智能降级匹配逻辑）
+    let selected_stream = parser::select_best_stream(&info.streams, &room.preferred_quality)
         .ok_or_else(|| "无有效画质流".to_string())?;
 
     info!("选择流: 画质={}", selected_stream.quality_name);
@@ -303,8 +299,8 @@ async fn open_login_window(app: AppHandle, _current_url: String) -> Result<(), S
     .build()
     .map_err(|e| format!("创建登录窗口失败: {}", e))?;
 
-    // 通过 JS 清除所有 Cookie，确保未登录状态
-    let _ = window.eval("document.cookie.split(';').forEach(c => { document.cookie = c.trim().split('=')[0] + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=.douyin.com'; }); setTimeout(() => location.reload(), 200);");
+    // 清除所有浏览器数据以确保是干净的未登录状态
+    let _ = window.clear_all_browsing_data();
 
     #[cfg(debug_assertions)]
     {
@@ -313,6 +309,8 @@ async fn open_login_window(app: AppHandle, _current_url: String) -> Result<(), S
 
     Ok(())
 }
+
+
 
 // ──────────────────────────────────────────────
 // 格式转换进度事件结构体
@@ -537,7 +535,7 @@ async fn convert_video(
 }
 
 // 辅助函数：挑选当前使用次数最少的 Cookie，并递增计数后保存
-fn get_and_increment_cookie(app: &AppHandle) -> String {
+pub(crate) fn get_and_increment_cookie(app: &AppHandle) -> String {
     let mut config = load_config(app);
     if config.global.cookies.is_empty() {
         return "".to_string();

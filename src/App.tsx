@@ -430,6 +430,7 @@ function App() {
               onSave={async ({ save_dir, ffmpeg_path, monitor_interval_secs }) => {
                 await handleSaveGlobalConfig({ save_dir, ffmpeg_path, monitor_interval_secs });
               }}
+              showAlert={alertAsync}
             />
           )}
         </main>

@@ -49,16 +49,55 @@ fn find_room_node(val: &Value, require_stream: bool) -> Option<&Value> {
     None
 }
 
-// 映射画质名称为友好中文名称
+// 映射画质名称为友好英文标识
 fn map_quality_name(key: &str) -> String {
-    match key {
-        "ORIGIN" => "origin".to_string(),
-        "BLUE_LIGHT" | "BLUE" => "blue_ray".to_string(),
-        "FULL_HD1" | "FULL_HD" => "uhd".to_string(),
+    let upper_key = key.to_uppercase();
+    match upper_key.as_str() {
+        "ORIGIN" | "OD" | "OR4" => "origin".to_string(),
+        "BLUE_LIGHT" | "BLUE" | "BD" => "blue_ray".to_string(),
+        "FULL_HD1" | "FULL_HD" | "UHD" => "uhd".to_string(),
         "HD1" | "HD" => "hd".to_string(),
-        "SD1" | "SD" => "sd".to_string(),
-        other => other.to_string(),
+        "SD1" | "SD" | "SD2" => "sd".to_string(),
+        _ => key.to_string(),
     }
+}
+
+// 获取画质的优先级，数字越大清晰度越高
+pub fn get_quality_priority(q: &str) -> i32 {
+    match q {
+        "origin" => 5,
+        "blue_ray" => 4,
+        "uhd" => 3,
+        "hd" => 2,
+        "sd" => 1,
+        _ => 0,
+    }
+}
+
+// 智能画质匹配降级查找算法
+pub fn select_best_stream<'a>(streams: &'a [LiveStream], preferred: &str) -> Option<&'a LiveStream> {
+    if streams.is_empty() {
+        return None;
+    }
+
+    // 根据选择的画质定义降级匹配优先级顺序
+    let fallback_order = match preferred {
+        "origin" => vec!["origin", "blue_ray", "uhd", "hd", "sd"],
+        "blue_ray" => vec!["blue_ray", "uhd", "hd", "sd", "origin"],
+        "uhd" => vec!["uhd", "hd", "sd", "blue_ray", "origin"],
+        "hd" => vec!["hd", "sd", "uhd", "blue_ray", "origin"],
+        "sd" => vec!["sd", "hd", "uhd", "blue_ray", "origin"],
+        _ => vec!["origin", "blue_ray", "uhd", "hd", "sd"],
+    };
+
+    for quality in fallback_order {
+        if let Some(stream) = streams.iter().find(|s| s.quality_name == quality) {
+            return Some(stream);
+        }
+    }
+
+    // 默认回退到排在最前面的最高画质流
+    streams.first()
 }
 
 pub async fn parse_douyin_live(
@@ -210,7 +249,10 @@ pub async fn parse_douyin_live(
                 .map(|m| m.as_str().trim().to_string())
                 .unwrap_or_else(|| "无标题/空白页".to_string());
 
-            let has_captcha = html.contains("验证码") || html.contains("security") || html.contains("滑块") || html.contains("验证");
+            let has_captcha = html.contains("secsdk-captcha") || 
+                              html.contains("captcha-verify-image") ||
+                              html.contains("verify-image") ||
+                              (html.contains("captcha") && html.contains("验证码"));
 
             return Err(format!(
                 "未在页面中提取到直播间数据！\n\
@@ -287,6 +329,9 @@ pub async fn parse_douyin_live(
                     m3u8_url,
                 });
             }
+
+            // 对解析到的 streams 按照画质优先级进行从高到低排序
+            streams.sort_by_key(|s| std::cmp::Reverse(get_quality_priority(&s.quality_name)));
         }
     }
 
@@ -345,6 +390,66 @@ mod tests {
         let info = res.unwrap();
         assert_eq!(info.is_live, false);
         assert_eq!(info.streams.len(), 0);
+    }
+    #[test]
+    fn test_quality_mapping() {
+        assert_eq!(map_quality_name("ORIGIN"), "origin");
+        assert_eq!(map_quality_name("od"), "origin");
+        assert_eq!(map_quality_name("or4"), "origin");
+        
+        assert_eq!(map_quality_name("blue_light"), "blue_ray");
+        assert_eq!(map_quality_name("BD"), "blue_ray");
+        
+        assert_eq!(map_quality_name("FULL_HD1"), "uhd");
+        assert_eq!(map_quality_name("uhd"), "uhd");
+        
+        assert_eq!(map_quality_name("hd1"), "hd");
+        assert_eq!(map_quality_name("HD"), "hd");
+        
+        assert_eq!(map_quality_name("sd2"), "sd");
+        assert_eq!(map_quality_name("SD"), "sd");
+        
+        assert_eq!(map_quality_name("random_key"), "random_key");
+    }
+
+    #[test]
+    fn test_select_best_stream() {
+        let streams = vec![
+            LiveStream {
+                quality_name: "uhd".to_string(),
+                flv_url: Some("url_uhd".to_string()),
+                m3u8_url: None,
+            },
+            LiveStream {
+                quality_name: "hd".to_string(),
+                flv_url: Some("url_hd".to_string()),
+                m3u8_url: None,
+            },
+            LiveStream {
+                quality_name: "sd".to_string(),
+                flv_url: Some("url_sd".to_string()),
+                m3u8_url: None,
+            },
+        ];
+
+        // 1. 首选原画，由于只有 uhd, hd, sd，因此应该智能降级到最清晰的 uhd
+        let match_origin = select_best_stream(&streams, "origin").unwrap();
+        assert_eq!(match_origin.quality_name, "uhd");
+
+        // 2. 首选蓝光，降级到 uhd
+        let match_blue = select_best_stream(&streams, "blue_ray").unwrap();
+        assert_eq!(match_blue.quality_name, "uhd");
+
+        // 3. 首选超清，精确匹配到 uhd
+        let match_uhd = select_best_stream(&streams, "uhd").unwrap();
+        assert_eq!(match_uhd.quality_name, "uhd");
+
+        // 4. 首选标清，精确匹配到 sd
+        let match_sd = select_best_stream(&streams, "sd").unwrap();
+        assert_eq!(match_sd.quality_name, "sd");
+
+        // 5. 空流情况
+        assert!(select_best_stream(&[], "origin").is_none());
     }
 }
 

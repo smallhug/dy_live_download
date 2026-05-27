@@ -53,7 +53,7 @@ impl Default for AppConfig {
                 cookies: Vec::new(),
                 user_agent: "".to_string(),
                 sec_ch_ua: "".to_string(),
-                monitor_interval_secs: 60,
+                monitor_interval_secs: 180,
             },
             rooms: Vec::new(),
         }

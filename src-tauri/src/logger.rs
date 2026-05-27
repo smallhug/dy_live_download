@@ -1,5 +1,5 @@
 use log::LevelFilter;
-use simplelog::{CombinedLogger, Config, WriteLogger};
+use simplelog::{CombinedLogger, WriteLogger};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use tauri::{AppHandle, Manager};
@@ -56,8 +56,12 @@ pub fn init_logger(app: &AppHandle) {
         }
     };
 
+    let mut config_builder = simplelog::ConfigBuilder::new();
+    let _ = config_builder.set_time_offset_to_local();
+    let config = config_builder.build();
+
     let _ = CombinedLogger::init(vec![
-        WriteLogger::new(LevelFilter::Info, Config::default(), log_file),
+        WriteLogger::new(LevelFilter::Info, config, log_file),
     ]);
 
     log::info!("日志系统初始化完成，日志文件: {:?}", log_path);
