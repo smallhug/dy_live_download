@@ -7,7 +7,8 @@ interface AddRoomModalProps {
     url: string,
     isMonitoring: boolean,
     preferredQuality: string,
-    segmentDurationMins: number
+    segmentDurationMins: number,
+    platform?: string
   ) => Promise<void>;
 }
 
@@ -17,6 +18,7 @@ export const AddRoomModal: React.FC<AddRoomModalProps> = ({
   onAdd,
 }) => {
   const [url, setUrl] = useState("");
+  const [platform, setPlatform] = useState("douyin");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -28,15 +30,15 @@ export const AddRoomModal: React.FC<AddRoomModalProps> = ({
     if (!cleanId) return;
 
     if (!/^\d+$/.test(cleanId)) {
-      setError("输入格式不正确，仅支持输入纯数字的直播间 ID，不支持输入链接。");
+      setError("输入格式不正确，仅支持输入直播间的纯数字 ID，不支持输入链接。");
       return;
     }
 
     setIsLoading(true);
     setError(null);
     try {
-      // 默认参数：默认开启监控 (true)，默认标清画质，默认分段 30 分钟
-      await onAdd(cleanId, true, "标清", 30);
+      // 默认参数：默认开启监控 (true)，默认原画画质，默认分段 30 分钟，传入所选平台
+      await onAdd(cleanId, true, "origin", 30, platform);
       setUrl("");
       onClose();
     } catch (err: any) {
@@ -59,15 +61,31 @@ export const AddRoomModal: React.FC<AddRoomModalProps> = ({
         <form onSubmit={handleSubmit} className="modal-form">
           {error && <div className="form-error">{error}</div>}
 
-          <div className="form-group">
-            <input
-              type="text"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              placeholder="输入直播间ID"
-              disabled={isLoading}
-              required
-            />
+          <div className="form-row">
+            <div className="form-group" style={{ width: "95px", flexShrink: 0 }}>
+              <label>直播平台</label>
+              <select
+                value={platform}
+                onChange={(e) => setPlatform(e.target.value)}
+                disabled={isLoading}
+                style={{ cursor: "pointer", paddingRight: "20px" }}
+              >
+                <option value="douyin">抖音</option>
+                <option value="bilibili">B站</option>
+              </select>
+            </div>
+
+            <div className="form-group" style={{ flex: 1 }}>
+              <label>直播间数字 ID</label>
+              <input
+                type="text"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="例如: 510200350291"
+                disabled={isLoading}
+                required
+              />
+            </div>
           </div>
 
           <div className="modal-actions">

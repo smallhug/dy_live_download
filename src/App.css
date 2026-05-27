@@ -74,11 +74,12 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 16px 14px; /* 固定左右内边距为 14px，保证宽度计算对称 */
+  padding: 16px 14px;
+  /* 固定左右内边距为 14px，保证宽度计算对称 */
   overflow: hidden;
-  transition: width 0.22s cubic-bezier(0.4, 0, 0.2, 1), 
-              box-shadow 0.22s ease,
-              background-color 0.22s ease;
+  transition: width 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 0.22s ease,
+    background-color 0.22s ease;
   box-shadow: 2px 0 10px rgba(15, 23, 42, 0.01);
 }
 
@@ -93,7 +94,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  padding-left: 15px; /* 让直径 14px 的 logo 保持在中轴线 36px 处 (14px padding + 15px + 7px = 36px) */
+  padding-left: 15px;
+  /* 让直径 14px 的 logo 保持在中轴线 36px 处 (14px padding + 15px + 7px = 36px) */
   margin-bottom: 32px;
   width: 100%;
 }
@@ -115,22 +117,26 @@ body {
   display: flex;
   flex-direction: column;
   width: 100%;
-  align-items: stretch; /* 始终撑满可用宽度，避免缩放时重新对齐 */
+  align-items: stretch;
+  /* 始终撑满可用宽度，避免缩放时重新对齐 */
   gap: 8px;
 }
 
 .nav-item {
   display: flex;
   align-items: center;
-  justify-content: flex-start; /* 始终居左排布 */
-  width: 100%; /* 始终撑满可用宽度 */
+  justify-content: flex-start;
+  /* 始终居左排布 */
+  width: 100%;
+  /* 始终撑满可用宽度 */
   height: 40px;
   border-radius: 8px;
   border: none;
   background: transparent;
   cursor: pointer;
   color: #64748b;
-  padding: 0 12px; /* 始终保持 12px 的 padding-left，从而使 20px 图标在 44px (72 - 28) 宽度下完美居中 */
+  padding: 0 12px;
+  /* 始终保持 12px 的 padding-left，从而使 20px 图标在 44px (72 - 28) 宽度下完美居中 */
   position: relative;
   outline: none;
   transition: background-color 0.2s ease, color 0.2s ease;
@@ -153,7 +159,8 @@ body {
 .nav-item.active::before {
   content: "";
   position: absolute;
-  left: 4px; /* 精致小圆点指示，悬缩前后绝对静止 */
+  left: 4px;
+  /* 精致小圆点指示，悬缩前后绝对静止 */
   top: 12px;
   bottom: 12px;
   width: 3px;
@@ -287,10 +294,12 @@ body {
     transform: scale(0.95);
     box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5);
   }
+
   70% {
     transform: scale(1);
     box-shadow: 0 0 0 5px rgba(16, 185, 129, 0);
   }
+
   100% {
     transform: scale(0.95);
     box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
@@ -313,8 +322,15 @@ body {
 }
 
 @keyframes fadeInContent {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .standard-tab-layout {
@@ -416,6 +432,7 @@ body {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  position: relative;
 }
 
 .room-card:hover {
@@ -426,6 +443,48 @@ body {
 .room-card.is-recording {
   border-color: #fca5a5;
   box-shadow: 0 6px 20px rgba(239, 68, 68, 0.05);
+  animation: recordingPulse 2s ease-in-out infinite;
+}
+
+.room-card.is-starting {
+  animation: recordStart 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.room-card.is-stopping {
+  animation: recordStop 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes recordingPulse {
+  0%, 100% { box-shadow: 0 6px 20px rgba(239, 68, 68, 0.05); }
+  50% { box-shadow: 0 6px 20px rgba(239, 68, 68, 0.15); }
+}
+
+@keyframes recordStart {
+  0% { border-color: #2563eb; }
+  50% { border-color: #f87171; }
+  100% { border-color: #fca5a5; }
+}
+
+@keyframes recordStop {
+  0% { border-color: #fca5a5; }
+  50% { border-color: #93c5fd; }
+  100% { border-color: #e2e8f0; }
+}
+
+.room-card.is-recording::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #ef4444, transparent);
+  animation: borderScan 2s linear infinite;
+}
+
+@keyframes borderScan {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
 }
 
 /* 卡片头部 */
@@ -501,8 +560,15 @@ body {
 }
 
 @keyframes blink {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 1; }
+
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+
+  50% {
+    opacity: 1;
+  }
 }
 
 /* 卡片内容主体 */
@@ -634,11 +700,11 @@ body {
   transition: transform 0.2s;
 }
 
-.switch-input:checked + .switch-slider {
+.switch-input:checked+.switch-slider {
   background-color: #2563eb;
 }
 
-.switch-input:checked + .switch-slider::before {
+.switch-input:checked+.switch-slider::before {
   transform: translateX(16px);
 }
 
@@ -923,8 +989,13 @@ body {
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 .modal-content {
@@ -939,8 +1010,15 @@ body {
 }
 
 @keyframes slideUp {
-  from { transform: translateY(15px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
+  from {
+    transform: translateY(15px);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
 
 .modal-header {
@@ -1099,6 +1177,40 @@ body {
 }
 
 @keyframes slideDown {
-  from { opacity: 0; transform: translateY(-8px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ── 平台卡片水印背景 ────────────────────────────────────────── */
+.room-card {
+  position: relative;
+}
+
+.card-platform-watermark {
+  position: absolute;
+  right: 12px;
+  top: 67px;
+  height: 20%;
+  opacity: 0.2;
+  pointer-events: none;
+  z-index: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #64748b;
+}
+
+/* 确保卡片内的实际内容在水印之上，不影响点击 */
+.room-card .card-header,
+.room-card .card-body,
+.room-card .card-actions {
+  position: relative;
+  z-index: 1;
 }

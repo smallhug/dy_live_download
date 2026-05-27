@@ -1,12 +1,12 @@
 mod config;
-mod parser;
+mod parsers;
 mod recorder;
 mod monitor;
 mod telemetry;
 mod logger;
 
 use config::{load_config, save_config, AppConfig, RoomConfig, CookieItem};
-use parser::{parse_douyin_live, LiveRoomInfo};
+use parsers::LiveRoomInfo;
 use recorder::{get_active_recordings, start_recording, stop_recording, RecorderState};
 use serde::{Deserialize, Serialize};
 use log::{info, warn, error};
@@ -41,10 +41,11 @@ fn update_global_config(
 
 // 3. 解析直播间基本信息（用于手动状态检测，使用 Cookie 以防滑块拦截）
 #[tauri::command]
-async fn parse_room(app: AppHandle, url: String) -> Result<LiveRoomInfo, String> {
-    let cookie = get_and_increment_cookie(&app);
+async fn parse_room(app: AppHandle, url: String, platform: Option<String>) -> Result<LiveRoomInfo, String> {
+    let platform_str = platform.unwrap_or_else(|| "douyin".to_string());
+    let cookie = get_and_increment_cookie(&app, &platform_str);
     let config = load_config(&app);
-    parse_douyin_live(&url, &cookie, &config.global.user_agent, &config.global.sec_ch_ua).await
+    parsers::parse_live(&platform_str, &url, &cookie, &config.global.user_agent, &config.global.sec_ch_ua, "origin").await
 }
 
 // 4. 添加直播间
@@ -55,13 +56,15 @@ async fn add_room(
     is_monitoring: bool,
     preferred_quality: String,
     segment_duration_mins: u64,
+    platform: Option<String>,
 ) -> Result<RoomConfig, String> {
+    let platform_str = platform.unwrap_or_else(|| "douyin".to_string());
     // 负载均衡选择并自增一个 Cookie 
-    let cookie = get_and_increment_cookie(&app);
+    let cookie = get_and_increment_cookie(&app, &platform_str);
     let mut config = load_config(&app);
 
     // 解析直播间，以获取真实的 anchor_name 和 room_id
-    let info = parse_douyin_live(&url, &cookie, &config.global.user_agent, &config.global.sec_ch_ua).await?;
+    let info = parsers::parse_live(&platform_str, &url, &cookie, &config.global.user_agent, &config.global.sec_ch_ua, &preferred_quality).await?;
 
     // 检查是否重复
     if config.rooms.iter().any(|r| r.room_id == info.room_id) {
@@ -75,8 +78,8 @@ async fn add_room(
         preferred_quality,
         segment_duration_mins,
         auto_record: false,
+        platform: platform_str,
     };
-
 
     config.rooms.push(new_room.clone());
     save_config(&app, &config)?;
@@ -118,8 +121,6 @@ async fn start_record_task(
     info!("开始手动录制任务");
     info!("room_id: {}", room_id);
 
-    // 负载均衡选择并自增一个 Cookie 
-    let cookie = get_and_increment_cookie(&app);
     let config = load_config(&app);
     let room = config
         .rooms
@@ -127,10 +128,14 @@ async fn start_record_task(
         .find(|r| r.room_id == room_id)
         .ok_or_else(|| "找不到该直播间配置".to_string())?;
 
-    info!("主播: {}, 房间ID: {}", room.anchor_name, room.room_id);
+    let platform_str = room.platform.clone();
+    // 负载均衡选择并自增一个 Cookie 
+    let cookie = get_and_increment_cookie(&app, &platform_str);
+
+    info!("主播: {}, 房间ID: {}, 平台: {}", room.anchor_name, room.room_id, platform_str);
 
     // 开始解析流地址
-    let info = parse_douyin_live(&room.room_id, &cookie, &config.global.user_agent, &config.global.sec_ch_ua).await?;
+    let info = parsers::parse_live(&platform_str, &room.room_id, &cookie, &config.global.user_agent, &config.global.sec_ch_ua, &room.preferred_quality).await?;
     
     info!("解析结果 - is_live: {}, streams数量: {}", info.is_live, info.streams.len());
     
@@ -153,7 +158,7 @@ async fn start_record_task(
     }
 
     // 匹配首选画质（使用智能降级匹配逻辑）
-    let selected_stream = parser::select_best_stream(&info.streams, &room.preferred_quality)
+    let selected_stream = parsers::select_best_stream(&info.streams, &room.preferred_quality)
         .ok_or_else(|| "无有效画质流".to_string())?;
 
     info!("选择流: 画质={}", selected_stream.quality_name);
@@ -181,6 +186,7 @@ async fn start_record_task(
         config.global.save_dir,
         room.segment_duration_mins,
         config.global.user_agent,  // 传入用户配置的 UA
+        platform_str,
     )
     .await?;
 
@@ -213,98 +219,177 @@ async fn get_active_task_titles(
     Ok(map)
 }
 
-// 10. 从内置的"douyin-login"子窗口中动态截取包含 HttpOnly 在内的所有 Cookie
+// 10. 从内置的登录子窗口中动态截取包含 HttpOnly 在内的所有 Cookie
 // ⚠️ 重要：Tauri 2.0 Windows 环境下必须使用 async 命令读取 cookies，否则会导致死锁！
 // 参考：https://docs.rs/tauri/latest/tauri/webview/struct.WebviewWindow.html
 #[tauri::command]
-async fn capture_login_cookies(app: AppHandle) -> Result<String, String> {
+async fn capture_login_cookies(app: AppHandle, platform: Option<String>) -> Result<String, String> {
     use url::Url;
 
-    info!("尝试捕获登录 Cookie (async 版本)");
-    // 获取名为 "douyin-login" 的子窗口
-    if let Some(window) = app.get_webview_window("douyin-login") {
-        let target_url = Url::parse("https://www.douyin.com")
-            .map_err(|e| {
-                let err_msg = format!("解析抖音域名URL失败: {}", e);
-                error!("{}", err_msg);
-                err_msg
-            })?;
+    let platform_str = platform.unwrap_or_else(|| "douyin".to_string());
+    info!("尝试捕获登录 Cookie (async 版本), 平台: {}", platform_str);
 
-        info!("正在为目标 URL 获取 Cookie: {} (async)", target_url);
-        // 提取该 WebView 底层的 Cookie 存储（async 命令中调用是安全的）
-        match window.cookies_for_url(target_url) {
-            Ok(cookies) => {
-                info!("cookies_for_url 调用成功，Cookie 总数: {}", cookies.len());
-                for (idx, c) in cookies.iter().enumerate() {
-                    info!(
-                        "Cookie[{}] Name: {}, Value Length: {}, Domain: {:?}, Secure: {:?}, HttpOnly: {:?}",
-                        idx + 1,
-                        c.name(),
-                        c.value().len(),
-                        c.domain(),
-                        c.secure(),
-                        c.http_only()
-                    );
+    if platform_str == "bilibili" {
+        if let Some(window) = app.get_webview_window("bilibili-login") {
+            let target_url = Url::parse("https://www.bilibili.com")
+                .map_err(|e| {
+                    let err_msg = format!("解析B站域名URL失败: {}", e);
+                    error!("{}", err_msg);
+                    err_msg
+                })?;
+
+            info!("正在为目标 URL 获取 Cookie: {} (async)", target_url);
+            match window.cookies_for_url(target_url) {
+                Ok(cookies) => {
+                    info!("cookies_for_url 调用成功，Cookie 总数: {}", cookies.len());
+                    for (idx, c) in cookies.iter().enumerate() {
+                        info!(
+                            "Cookie[{}] Name: {}, Value Length: {}, Domain: {:?}, Secure: {:?}, HttpOnly: {:?}",
+                            idx + 1,
+                            c.name(),
+                            c.value().len(),
+                            c.domain(),
+                            c.secure(),
+                            c.http_only()
+                        );
+                    }
+
+                    let cookie_str = cookies
+                        .iter()
+                        .map(|c| format!("{}={}", c.name(), c.value()))
+                        .collect::<Vec<String>>()
+                        .join("; ");
+
+                    if cookie_str.contains("SESSDATA") {
+                        info!("检测到B站关键会话 Cookie (SESSDATA)，捕获成功");
+                        Ok(cookie_str)
+                    } else {
+                        warn!("Cookie 已捕获，但缺少关键的 SESSDATA，用户可能未完成登录验证");
+                        Err("未在子窗口中检测到您的B站登录信息，请确保您在扫码助手窗口中已经完成了验证和登录！".to_string())
+                    }
                 }
-
-                let cookie_str = cookies
-                    .iter()
-                    .map(|c| format!("{}={}", c.name(), c.value()))
-                    .collect::<Vec<String>>()
-                    .join("; ");
-
-                if cookie_str.contains("sessionid") || cookie_str.contains("passport_csrf_token") {
-                    info!("检测到关键会话 Cookie (sessionid/passport_csrf_token)，捕获成功");
-                    Ok(cookie_str)
-                } else {
-                    warn!("Cookie 已捕获，但缺少关键的 sessionid 或 passport_csrf_token，用户可能未完成登录验证");
-                    Err("未在子窗口中检测到您的抖音登录信息，请确保您在扫码助手窗口中已经完成了验证和登录！".to_string())
+                Err(e) => {
+                    let err_msg = format!("从底层 WebView 获取 Cookie 失败: {}", e);
+                    error!("{}", err_msg);
+                    Err(err_msg)
                 }
             }
-            Err(e) => {
-                let err_msg = format!("从底层 WebView 获取 Cookie 失败: {}", e);
-                error!("{}", err_msg);
-                Err(err_msg)
-            }
+        } else {
+            error!("bilibili-login 窗口实例不存在");
+            Err("登录助手窗口未打开。请先点击【开启扫码登录助手】按钮拉起窗口！".to_string())
         }
     } else {
-        error!("douyin-login 窗口实例不存在");
-        Err("登录助手窗口未打开。请先点击【开启扫码登录助手】按钮拉起窗口！".to_string())
+        if let Some(window) = app.get_webview_window("douyin-login") {
+            let target_url = Url::parse("https://www.douyin.com")
+                .map_err(|e| {
+                    let err_msg = format!("解析抖音域名URL失败: {}", e);
+                    error!("{}", err_msg);
+                    err_msg
+                })?;
+
+            info!("正在为目标 URL 获取 Cookie: {} (async)", target_url);
+            match window.cookies_for_url(target_url) {
+                Ok(cookies) => {
+                    info!("cookies_for_url 调用成功，Cookie 总数: {}", cookies.len());
+                    for (idx, c) in cookies.iter().enumerate() {
+                        info!(
+                            "Cookie[{}] Name: {}, Value Length: {}, Domain: {:?}, Secure: {:?}, HttpOnly: {:?}",
+                            idx + 1,
+                            c.name(),
+                            c.value().len(),
+                            c.domain(),
+                            c.secure(),
+                            c.http_only()
+                        );
+                    }
+
+                    let cookie_str = cookies
+                        .iter()
+                        .map(|c| format!("{}={}", c.name(), c.value()))
+                        .collect::<Vec<String>>()
+                        .join("; ");
+
+                    if cookie_str.contains("sessionid") || cookie_str.contains("passport_csrf_token") {
+                        info!("检测到抖音关键会话 Cookie (sessionid/passport_csrf_token)，捕获成功");
+                        Ok(cookie_str)
+                    } else {
+                        warn!("Cookie 已捕获，但缺少关键的 sessionid 或 passport_csrf_token，用户可能未完成登录验证");
+                        Err("未在子窗口中检测到您的抖音登录信息，请确保您在扫码助手窗口中已经完成了验证和登录！".to_string())
+                    }
+                }
+                Err(e) => {
+                    let err_msg = format!("从底层 WebView 获取 Cookie 失败: {}", e);
+                    error!("{}", err_msg);
+                    Err(err_msg)
+                }
+            }
+        } else {
+            error!("douyin-login 窗口实例不存在");
+            Err("登录助手窗口未打开。请先点击【开启扫码登录助手】按钮拉起窗口！".to_string())
+        }
     }
 }
 
-// 11. 打开内置的抖音登录辅助窗口 (由后端拉起，避开前端 Capabilities 权限限制)
+// 11. 打开内置的登录辅助窗口 (由后端拉起，避开前端 Capabilities 权限限制)
 // ⚠️ 重要：Tauri 2.0 Windows 环境下必须使用 async 命令创建窗口，否则会导致死锁！
 // 参考：https://github.com/tauri-apps/wry/issues/583
 #[tauri::command]
-async fn open_login_window(app: AppHandle, _current_url: String) -> Result<(), String> {
+async fn open_login_window(app: AppHandle, platform: Option<String>) -> Result<(), String> {
     use url::Url;
 
-    // 如果已存在旧窗口，先关闭以清除会话
-    if let Some(old_window) = app.get_webview_window("douyin-login") {
-        let _ = old_window.close();
-    }
+    let platform_str = platform.unwrap_or_else(|| "douyin".to_string());
+    info!("打开登录辅助窗口, 平台: {}", platform_str);
 
-    let target_url = Url::parse("https://www.douyin.com").map_err(|e| format!("解析抖音URL失败: {}", e))?;
+    if platform_str == "bilibili" {
+        if let Some(old_window) = app.get_webview_window("bilibili-login") {
+            let _ = old_window.close();
+        }
 
-    let window = tauri::WebviewWindowBuilder::new(
-        &app,
-        "douyin-login",
-        tauri::WebviewUrl::External(target_url),
-    )
-    .title("抖音扫码登录助手")
-    .inner_size(1000.0, 700.0)
-    .resizable(true)
-    .center()
-    .build()
-    .map_err(|e| format!("创建登录窗口失败: {}", e))?;
+        let target_url = Url::parse("https://passport.bilibili.com/login").map_err(|e| format!("解析B站登录URL失败: {}", e))?;
 
-    // 清除所有浏览器数据以确保是干净的未登录状态
-    let _ = window.clear_all_browsing_data();
+        let window = tauri::WebviewWindowBuilder::new(
+            &app,
+            "bilibili-login",
+            tauri::WebviewUrl::External(target_url),
+        )
+        .title("哔哩哔哩扫码登录助手")
+        .inner_size(1000.0, 700.0)
+        .resizable(true)
+        .center()
+        .build()
+        .map_err(|e| format!("创建登录窗口失败: {}", e))?;
 
-    #[cfg(debug_assertions)]
-    {
-        let _ = window.open_devtools();
+        let _ = window.clear_all_browsing_data();
+
+        #[cfg(debug_assertions)]
+        {
+            let _ = window.open_devtools();
+        }
+    } else {
+        if let Some(old_window) = app.get_webview_window("douyin-login") {
+            let _ = old_window.close();
+        }
+
+        let target_url = Url::parse("https://www.douyin.com").map_err(|e| format!("解析抖音URL失败: {}", e))?;
+
+        let window = tauri::WebviewWindowBuilder::new(
+            &app,
+            "douyin-login",
+            tauri::WebviewUrl::External(target_url),
+        )
+        .title("抖音扫码登录助手")
+        .inner_size(1000.0, 700.0)
+        .resizable(true)
+        .center()
+        .build()
+        .map_err(|e| format!("创建登录窗口失败: {}", e))?;
+
+        let _ = window.clear_all_browsing_data();
+
+        #[cfg(debug_assertions)]
+        {
+            let _ = window.open_devtools();
+        }
     }
 
     Ok(())
@@ -534,17 +619,26 @@ async fn convert_video(
     Ok(())
 }
 
-// 辅助函数：挑选当前使用次数最少的 Cookie，并递增计数后保存
-pub(crate) fn get_and_increment_cookie(app: &AppHandle) -> String {
+// 辅助函数：挑选当前指定平台下使用次数最少的 Cookie，并递增计数后保存
+pub(crate) fn get_and_increment_cookie(app: &AppHandle, platform: &str) -> String {
     let mut config = load_config(app);
-    if config.global.cookies.is_empty() {
+    // 筛选出对应平台的 Cookie
+    let mut matched_indices = Vec::new();
+    for (idx, item) in config.global.cookies.iter().enumerate() {
+        if item.platform == platform {
+            matched_indices.push(idx);
+        }
+    }
+
+    if matched_indices.is_empty() {
         return "".to_string();
     }
 
     // 寻找 use_count 最小的项
-    let mut min_idx = 0;
+    let mut min_idx = matched_indices[0];
     let mut min_count = u32::MAX;
-    for (idx, item) in config.global.cookies.iter().enumerate() {
+    for &idx in &matched_indices {
+        let item = &config.global.cookies[idx];
         if item.use_count < min_count {
             min_count = item.use_count;
             min_idx = idx;
@@ -562,7 +656,8 @@ pub(crate) fn get_and_increment_cookie(app: &AppHandle) -> String {
 
 // 13. 提供根据 Cookie 自动解析其登录账号昵称的命令
 #[tauri::command]
-async fn get_cookie_nickname(app: AppHandle, cookie: String) -> Result<Option<String>, String> {
+async fn get_cookie_nickname(app: AppHandle, cookie: String, platform: Option<String>) -> Result<Option<String>, String> {
+    let platform_str = platform.unwrap_or_else(|| "douyin".to_string());
     let config = load_config(&app);
     let ua = if config.global.user_agent.trim().is_empty() {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -570,31 +665,46 @@ async fn get_cookie_nickname(app: AppHandle, cookie: String) -> Result<Option<St
         &config.global.user_agent
     };
 
-    Ok(parser::fetch_nickname_from_cookie(&cookie, ua).await)
+    Ok(parsers::fetch_nickname(&platform_str, &cookie, ua).await)
 }
 
 #[tauri::command]
-async fn check_login_status(app: AppHandle) -> Result<bool, String> {
+async fn check_login_status(app: AppHandle, platform: Option<String>) -> Result<bool, String> {
     use url::Url;
 
-    let Some(window) = app.get_webview_window("douyin-login") else {
-        return Ok(false);
-    };
-
-    let target_url = Url::parse("https://www.douyin.com")
-        .map_err(|e| format!("URL 解析失败: {}", e))?;
-
-    match window.cookies_for_url(target_url) {
-        Ok(cookies) => {
-            let has_session = cookies.iter().any(|c| c.name() == "sessionid" && !c.value().is_empty());
-            Ok(has_session)
+    let platform_str = platform.unwrap_or_else(|| "douyin".to_string());
+    if platform_str == "bilibili" {
+        let Some(window) = app.get_webview_window("bilibili-login") else {
+            return Ok(false);
+        };
+        let target_url = Url::parse("https://www.bilibili.com")
+            .map_err(|e| format!("URL 解析失败: {}", e))?;
+        match window.cookies_for_url(target_url) {
+            Ok(cookies) => {
+                let has_session = cookies.iter().any(|c| c.name() == "SESSDATA" && !c.value().is_empty());
+                Ok(has_session)
+            }
+            Err(e) => Err(format!("获取 Cookie 失败: {}", e)),
         }
-        Err(e) => Err(format!("获取 Cookie 失败: {}", e)),
+    } else {
+        let Some(window) = app.get_webview_window("douyin-login") else {
+            return Ok(false);
+        };
+        let target_url = Url::parse("https://www.douyin.com")
+            .map_err(|e| format!("URL 解析失败: {}", e))?;
+        match window.cookies_for_url(target_url) {
+            Ok(cookies) => {
+                let has_session = cookies.iter().any(|c| c.name() == "sessionid" && !c.value().is_empty());
+                Ok(has_session)
+            }
+            Err(e) => Err(format!("获取 Cookie 失败: {}", e)),
+        }
     }
 }
 
 #[tauri::command]
-async fn validate_cookie(app: AppHandle, cookie: String) -> Result<bool, String> {
+async fn validate_cookie(app: AppHandle, cookie: String, platform: Option<String>) -> Result<bool, String> {
+    let platform_str = platform.unwrap_or_else(|| "douyin".to_string());
     let config = load_config(&app);
     let ua = if config.global.user_agent.trim().is_empty() {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -602,7 +712,7 @@ async fn validate_cookie(app: AppHandle, cookie: String) -> Result<bool, String>
         &config.global.user_agent
     };
 
-    match parser::fetch_nickname_from_cookie(&cookie, ua).await {
+    match parsers::fetch_nickname(&platform_str, &cookie, ua).await {
         Some(_) => Ok(true),
         None => Ok(false),
     }

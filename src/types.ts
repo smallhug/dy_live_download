@@ -4,6 +4,7 @@ export interface CookieItem {
   value: string;
   acquired_at: string;
   use_count: number;
+  platform: string;
 }
 
 export interface GlobalConfig {
@@ -22,6 +23,7 @@ export interface RoomConfig {
   preferred_quality: string;
   segment_duration_mins: number;
   auto_record: boolean;
+  platform: string;
 }
 
 

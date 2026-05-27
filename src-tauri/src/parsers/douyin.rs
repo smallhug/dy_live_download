@@ -1,28 +1,27 @@
 use std::sync::LazyLock;
 use std::time::Duration;
 use regex::Regex;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::form_urlencoded;
+use super::{LiveParser, LiveRoomInfo, LiveStream};
 
 static RE_PACE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"self\.__pace_f\.push\(\[\s*\d+\s*,\s*"(.*?)"\s*\]\)"#).unwrap());
 static RE_RENDER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<script\s+id="RENDER_DATA"\s+type="application/json">([^<]+)</script>"#).unwrap());
 static RE_TITLE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<title>([^<]+)</title>").unwrap());
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct LiveStream {
-    pub quality_name: String, // 例如: 原画, 蓝光, 超清, 高清
-    pub flv_url: Option<String>,
-    pub m3u8_url: Option<String>,
-}
+pub struct DouyinParser;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct LiveRoomInfo {
-    pub room_id: String,
-    pub anchor_name: String,
-    pub title: String,
-    pub is_live: bool,
-    pub streams: Vec<LiveStream>,
+impl LiveParser for DouyinParser {
+    async fn parse(
+        &self,
+        room_id: &str,
+        cookie: &str,
+        user_agent: &str,
+        sec_ch_ua: &str,
+        _preferred_quality: &str, // 占位符，抖音一次性返回全部画质无需单独请求
+    ) -> Result<LiveRoomInfo, String> {
+        parse_douyin_live(room_id, cookie, user_agent, sec_ch_ua).await
+    }
 }
 
 // 递归查找包含 room 和 stream_url 的子节点（可以指定是否必须包含 stream_url）
@@ -62,44 +61,6 @@ fn map_quality_name(key: &str) -> String {
     }
 }
 
-// 获取画质的优先级，数字越大清晰度越高
-pub fn get_quality_priority(q: &str) -> i32 {
-    match q {
-        "origin" => 5,
-        "blue_ray" => 4,
-        "uhd" => 3,
-        "hd" => 2,
-        "sd" => 1,
-        _ => 0,
-    }
-}
-
-// 智能画质匹配降级查找算法
-pub fn select_best_stream<'a>(streams: &'a [LiveStream], preferred: &str) -> Option<&'a LiveStream> {
-    if streams.is_empty() {
-        return None;
-    }
-
-    // 根据选择的画质定义降级匹配优先级顺序
-    let fallback_order = match preferred {
-        "origin" => vec!["origin", "blue_ray", "uhd", "hd", "sd"],
-        "blue_ray" => vec!["blue_ray", "uhd", "hd", "sd", "origin"],
-        "uhd" => vec!["uhd", "hd", "sd", "blue_ray", "origin"],
-        "hd" => vec!["hd", "sd", "uhd", "blue_ray", "origin"],
-        "sd" => vec!["sd", "hd", "uhd", "blue_ray", "origin"],
-        _ => vec!["origin", "blue_ray", "uhd", "hd", "sd"],
-    };
-
-    for quality in fallback_order {
-        if let Some(stream) = streams.iter().find(|s| s.quality_name == quality) {
-            return Some(stream);
-        }
-    }
-
-    // 默认回退到排在最前面的最高画质流
-    streams.first()
-}
-
 pub async fn parse_douyin_live(
     room_url: &str,
     cookie: &str,
@@ -124,7 +85,7 @@ pub async fn parse_douyin_live(
     headers.insert("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6".parse().unwrap());
     headers.insert("Referer", "https://live.douyin.com/".parse().unwrap());
 
-    // 优先采用配置的 UA 与 sec-ch-ua，若空则使用 Edge 147 的默认值
+    // 优先采用配置 of UA 与 sec-ch-ua，若空则使用 Edge 147 的默认值
     let actual_ua = if user_agent.trim().is_empty() {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0"
     } else {
@@ -331,7 +292,7 @@ pub async fn parse_douyin_live(
             }
 
             // 对解析到的 streams 按照画质优先级进行从高到低排序
-            streams.sort_by_key(|s| std::cmp::Reverse(get_quality_priority(&s.quality_name)));
+            streams.sort_by_key(|s| std::cmp::Reverse(super::get_quality_priority(&s.quality_name)));
         }
     }
 
@@ -379,13 +340,11 @@ pub async fn fetch_nickname_from_cookie(cookie: &str, user_agent: &str) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
-    use log::info;
 
     #[tokio::test]
     async fn test_offline_room() {
         let room_id = "510200350291";
         let res = parse_douyin_live(room_id, "", "", "").await;
-        info!("Result: {:?}", res);
         assert!(res.is_ok());
         let info = res.unwrap();
         assert_eq!(info.is_live, false);
@@ -433,23 +392,22 @@ mod tests {
         ];
 
         // 1. 首选原画，由于只有 uhd, hd, sd，因此应该智能降级到最清晰的 uhd
-        let match_origin = select_best_stream(&streams, "origin").unwrap();
+        let match_origin = super::super::select_best_stream(&streams, "origin").unwrap();
         assert_eq!(match_origin.quality_name, "uhd");
 
         // 2. 首选蓝光，降级到 uhd
-        let match_blue = select_best_stream(&streams, "blue_ray").unwrap();
+        let match_blue = super::super::select_best_stream(&streams, "blue_ray").unwrap();
         assert_eq!(match_blue.quality_name, "uhd");
 
         // 3. 首选超清，精确匹配到 uhd
-        let match_uhd = select_best_stream(&streams, "uhd").unwrap();
+        let match_uhd = super::super::select_best_stream(&streams, "uhd").unwrap();
         assert_eq!(match_uhd.quality_name, "uhd");
 
         // 4. 首选标清，精确匹配到 sd
-        let match_sd = select_best_stream(&streams, "sd").unwrap();
+        let match_sd = super::super::select_best_stream(&streams, "sd").unwrap();
         assert_eq!(match_sd.quality_name, "sd");
 
         // 5. 空流情况
-        assert!(select_best_stream(&[], "origin").is_none());
+        assert!(super::super::select_best_stream(&[], "origin").is_none());
     }
 }
-

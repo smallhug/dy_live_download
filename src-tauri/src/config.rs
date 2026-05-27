@@ -3,14 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct CookieItem {
-    pub id: String,            // 唯一标识 (例如时间戳)
-    pub nickname: String,      // 账号昵称
-    pub value: String,         // 实际的 Cookie 字符串内容
-    pub acquired_at: String,   // 获取时间 (YYYY-MM-DD HH:MM:SS)
-    pub use_count: u32,        // 使用次数
-}
+
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GlobalConfig {
@@ -26,6 +19,21 @@ fn default_true() -> bool {
   true
 }
 
+fn default_platform() -> String {
+  "douyin".to_string()
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CookieItem {
+    pub id: String,            // 唯一标识 (例如时间戳)
+    pub nickname: String,      // 账号昵称
+    pub value: String,         // 实际的 Cookie 字符串内容
+    pub acquired_at: String,   // 获取时间 (YYYY-MM-DD HH:MM:SS)
+    pub use_count: u32,        // 使用次数
+    #[serde(default = "default_platform")]
+    pub platform: String,      // 平台
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RoomConfig {
     pub room_id: String,          // 直播间唯一标识
@@ -35,6 +43,8 @@ pub struct RoomConfig {
     pub segment_duration_mins: u64, // 分段时长(分钟)，0表示不分段
     #[serde(default = "default_true")]
     pub auto_record: bool,         // 开播后是否自动录制
+    #[serde(default = "default_platform")]
+    pub platform: String,          // 平台
 }
 
 

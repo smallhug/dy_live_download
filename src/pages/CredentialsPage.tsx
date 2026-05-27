@@ -42,6 +42,7 @@ export default function CredentialsPage({ config, onSaveCookies }: CredentialsPa
   const [showManualInput, setShowManualInput] = useState(false);
   const [manualNickname, setManualNickname] = useState("");
   const [manualCookieValue, setManualCookieValue] = useState("");
+  const [manualPlatform, setManualPlatform] = useState("douyin");
   const [manualError, setManualError] = useState<string | null>(null);
   const [showNicknameModal, setShowNicknameModal] = useState(false);
   const [pendingCookie, setPendingCookie] = useState<string | null>(null);
@@ -67,21 +68,24 @@ export default function CredentialsPage({ config, onSaveCookies }: CredentialsPa
     };
   }, [loginPollTimer]);
 
-  const startLoginFlow = async () => {
+  const [activeLoginPlatform, setActiveLoginPlatform] = useState<"douyin" | "bilibili">("douyin");
+
+  const startLoginFlow = async (platform: "douyin" | "bilibili") => {
+    setActiveLoginPlatform(platform);
     setLoginFlow("opening");
-    setLoginFlowMsg("正在打开登录窗口...");
+    setLoginFlowMsg(platform === "bilibili" ? "正在打开 B 站登录窗口..." : "正在打开抖音登录窗口...");
     try {
-      await invoke("open_login_window", { currentUrl: window.location.href });
+      await invoke("open_login_window", { platform });
       setLoginFlow("waiting_login");
-      setLoginFlowMsg("请在弹出的窗口中扫码登录");
+      setLoginFlowMsg("请在弹出的窗口中扫码登录并完成验证");
 
       const timer = setInterval(async () => {
         try {
-          const loggedIn = await invoke<boolean>("check_login_status");
+          const loggedIn = await invoke<boolean>("check_login_status", { platform });
           if (loggedIn) {
             clearInterval(timer);
             setLoginPollTimer(null);
-            await finishLoginFlow();
+            await finishLoginFlow(platform);
           }
         } catch {
         }
@@ -99,18 +103,19 @@ export default function CredentialsPage({ config, onSaveCookies }: CredentialsPa
       setLoginPollTimer(null);
     }
     try {
-      const loginWin = await WebviewWindow.getByLabel("douyin-login");
+      const windowLabel = activeLoginPlatform === "bilibili" ? "bilibili-login" : "douyin-login";
+      const loginWin = await WebviewWindow.getByLabel(windowLabel);
       if (loginWin) await loginWin.close();
     } catch {}
     setLoginFlow("idle");
     setLoginFlowMsg("");
   };
 
-  const finishLoginFlow = async () => {
+  const finishLoginFlow = async (platform: "douyin" | "bilibili") => {
     setLoginFlow("capturing");
     setLoginFlowMsg("已检测到登录，正在获取凭证...");
     try {
-      const capturedCookie = await invoke<string>("capture_login_cookies");
+      const capturedCookie = await invoke<string>("capture_login_cookies", { platform });
       const currentCookies = config?.global.cookies || [];
 
       if (currentCookies.some(c => c.value === capturedCookie)) {
@@ -136,7 +141,8 @@ export default function CredentialsPage({ config, onSaveCookies }: CredentialsPa
     if (!nickname || !pendingCookie) return;
 
     try {
-      const loginWin = await WebviewWindow.getByLabel("douyin-login");
+      const windowLabel = activeLoginPlatform === "bilibili" ? "bilibili-login" : "douyin-login";
+      const loginWin = await WebviewWindow.getByLabel(windowLabel);
       if (loginWin) await loginWin.close();
     } catch {}
 
@@ -148,6 +154,7 @@ export default function CredentialsPage({ config, onSaveCookies }: CredentialsPa
       value: pendingCookie,
       acquired_at: acquiredAt,
       use_count: 0,
+      platform: activeLoginPlatform,
     };
 
     const currentCookies = config?.global.cookies || [];
@@ -165,8 +172,12 @@ export default function CredentialsPage({ config, onSaveCookies }: CredentialsPa
     if (!nickname) { setManualError("账号昵称/备注不能为空"); return; }
     if (!value) { setManualError("Cookie 内容不能为空"); return; }
 
-    if (!value.includes("sessionid") && !value.includes("passport_csrf_token")) {
+    if (manualPlatform === "douyin" && !value.includes("sessionid") && !value.includes("passport_csrf_token")) {
       if (!await confirmAsync("警告：输入的 Cookie 缺少核心的 sessionid，可能无法正常拉流或添加主播。确定要强制添加吗？", "Cookie 缺失警告")) {
+        return;
+      }
+    } else if (manualPlatform === "bilibili" && !value.includes("SESSDATA")) {
+      if (!await confirmAsync("警告：输入的 Cookie 缺少 B 站核心的 SESSDATA，可能无法在监控时获取高清或原画画质。确定要强制添加吗？", "Cookie 缺失警告")) {
         return;
       }
     }
@@ -185,11 +196,13 @@ export default function CredentialsPage({ config, onSaveCookies }: CredentialsPa
       value,
       acquired_at: acquiredAt,
       use_count: 0,
+      platform: manualPlatform,
     };
 
     await onSaveCookies([...currentCookies, newCookie]);
     setManualNickname("");
     setManualCookieValue("");
+    setManualPlatform("douyin");
     setShowManualInput(false);
   };
 
@@ -209,12 +222,17 @@ export default function CredentialsPage({ config, onSaveCookies }: CredentialsPa
           </div>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: "14px", fontWeight: "600", color: "#0f172a" }}>扫码登录获取凭证</div>
-            <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "2px" }}>自动打开抖音登录页面，扫码后自动捕获 Cookie</div>
+            <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "2px" }}>自动打开相应平台的登录页面，扫码后自动捕获 Cookie</div>
           </div>
           {loginFlow === "idle" && (
-            <button className="btn btn-primary btn-sm" onClick={startLoginFlow}>
-              <GlobeIcon size={14} /> 开始登录
-            </button>
+            <div style={{ display: "flex", gap: "8px" }}>
+              <button className="btn btn-primary btn-sm" onClick={() => startLoginFlow("douyin")} style={{ fontSize: "12px" }}>
+                <GlobeIcon size={13} /> 抖音扫码登录
+              </button>
+              <button className="btn btn-primary btn-sm" onClick={() => startLoginFlow("bilibili")} style={{ background: "#fb7299", borderColor: "#fb7299", color: "#fff", fontSize: "12px" }}>
+                <GlobeIcon size={13} /> B站扫码登录
+              </button>
+            </div>
           )}
           {loginFlow !== "idle" && loginFlow !== "done" && loginFlow !== "error" && (
             <button className="btn btn-secondary btn-sm" onClick={cancelLoginFlow}>
@@ -262,6 +280,17 @@ export default function CredentialsPage({ config, onSaveCookies }: CredentialsPa
             <div className="modal-form">
               {manualError && <div className="form-error">{manualError}</div>}
               <div className="form-group">
+                <label>所属平台</label>
+                <select
+                  value={manualPlatform}
+                  onChange={(e) => setManualPlatform(e.target.value)}
+                  style={{ cursor: "pointer" }}
+                >
+                  <option value="douyin">抖音直播</option>
+                  <option value="bilibili">哔哩哔哩 (B站)</option>
+                </select>
+              </div>
+              <div className="form-group">
                 <label>账号备注或昵称</label>
                 <input
                   type="text"
@@ -290,7 +319,7 @@ export default function CredentialsPage({ config, onSaveCookies }: CredentialsPa
 
       {!config || !config.global.cookies || config.global.cookies.length === 0 ? (
         <div className="no-data-hint">
-          当前尚未添加任何抖音账号凭证。未登录凭证运行，自动监控检测和录制可能会触发抖音防爬滑块验证。
+          当前尚未添加任何账号凭证。未配置登录凭证时运行，自动监控检测和录制可能会触发平台的防爬风控限制。
         </div>
       ) : (
         <div className="table-wrapper glass-card">
@@ -307,7 +336,21 @@ export default function CredentialsPage({ config, onSaveCookies }: CredentialsPa
             <tbody>
               {config.global.cookies.map((c) => (
                 <tr key={c.id}>
-                  <td style={{ fontWeight: "600", color: "#0f172a" }}>{c.nickname}</td>
+                  <td style={{ fontWeight: "600", color: "#0f172a" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                      <span>{c.nickname}</span>
+                      <span style={{
+                        fontSize: "10px",
+                        padding: "1px 5px",
+                        borderRadius: "4px",
+                        backgroundColor: c.platform === "bilibili" ? "#e0f2fe" : "#f1f5f9",
+                        color: c.platform === "bilibili" ? "#0369a1" : "#475569",
+                        fontWeight: "600"
+                      }}>
+                        {c.platform === "bilibili" ? "B站" : "抖音"}
+                      </span>
+                    </div>
+                  </td>
                   <td style={{ color: "#94a3b8", fontFamily: "monospace", fontSize: "11px" }}>
                     {c.value.length > 30 ? c.value.slice(0, 30) + "..." : c.value}
                   </td>

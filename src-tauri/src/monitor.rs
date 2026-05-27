@@ -1,5 +1,5 @@
 use crate::config::{load_config, RoomConfig};
-use crate::parser::parse_douyin_live;
+use crate::parsers;
 use crate::recorder::{start_recording, RecorderState};
 use log::{info, error};
 use std::time::Duration;
@@ -48,13 +48,15 @@ pub fn start_monitor_loop(app: AppHandle) {
                     let global_clone = global.clone();
 
                     // 异步拉起检测，防止阻塞其他房间检测
-                    let cookie = crate::get_and_increment_cookie(&app_clone);
+                    let cookie = crate::get_and_increment_cookie(&app_clone, &room_clone.platform);
                     tauri::async_runtime::spawn(async move {
-                        match parse_douyin_live(
+                        match parsers::parse_live(
+                            &room_clone.platform,
                             &room_clone.room_id,
                             &cookie,  // 使用已保存的 Cookie 进行状态检测以防止滑块拦截
                             &global_clone.user_agent,
                             &global_clone.sec_ch_ua,
+                            &room_clone.preferred_quality,
                         )
                         .await
                         {
@@ -69,7 +71,7 @@ pub fn start_monitor_loop(app: AppHandle) {
                                 if info.is_live && !info.streams.is_empty() {
                                     if room_clone.auto_record {
                                          // 查找画质匹配（使用智能降级匹配逻辑）
-                                         let selected_stream = crate::parser::select_best_stream(&info.streams, &room_clone.preferred_quality);
+                                         let selected_stream = parsers::select_best_stream(&info.streams, &room_clone.preferred_quality);
 
                                         if let Some(stream) = selected_stream {
                                             // 优先采用 flv 地址，其次为 m3u8（与手动录制逻辑一致）
@@ -91,6 +93,7 @@ pub fn start_monitor_loop(app: AppHandle) {
                                                         global_clone.save_dir.clone(),
                                                         room_clone.segment_duration_mins,
                                                         global_clone.user_agent.clone(),  // 传入用户配置 of UA
+                                                        room_clone.platform.clone(),
                                                     )
                                                     .await;
 

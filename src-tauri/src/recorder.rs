@@ -53,6 +53,7 @@ pub async fn start_recording(
     save_dir: String,
     segment_duration_mins: u64,
     user_agent: String,  // 新增：用户配置的 UA
+    platform: String,    // 新增：平台
 ) -> Result<(), String> {
     let mut tasks = state.tasks.lock().await;
     if tasks.contains_key(&room_id) {
@@ -82,6 +83,16 @@ pub async fn start_recording(
     let is_flv_stream = stream_url.contains(".flv") || stream_url.starts_with("rtmp");
     let ext = if is_flv_stream { "flv" } else { "mp4" };
 
+    // 确定 Referer，防止 B 站等平台拉流返回 403 Forbidden
+    let is_bilibili = platform.eq_ignore_ascii_case("bilibili")
+        || stream_url.contains("bilibili.com")
+        || stream_url.contains("bilivideo.com");
+    let referer = if is_bilibili {
+        "https://live.bilibili.com/"
+    } else {
+        "https://live.douyin.com/"
+    };
+
     // 组装 FFmpeg 参数（精简版：只使用最通用、最稳定的参数）
     // 注意：FFmpeg 参数顺序必须是：[全局选项] -> [输入选项] -> -i URL -> [输出选项] -> 输出文件
     let mut args = vec![
@@ -92,11 +103,11 @@ pub async fn start_recording(
         "file,http,https,tcp,tls,crypto".to_string(),
         // 以下为输入选项（必须在 -i 之前）
         "-headers".to_string(),                     // [输入] HTTP 请求头
-        format!("User-Agent: {}\r\nReferer: https://live.douyin.com/\r\n", if user_agent.trim().is_empty() {
+        format!("User-Agent: {}\r\nReferer: {}\r\n", if user_agent.trim().is_empty() {
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0"
         } else {
             &user_agent
-        }),
+        }, referer),
         // 输入源
         "-i".to_string(),                          // 输入URL标记
         stream_url,

@@ -186,13 +186,15 @@ function App() {
     url: string,
     isMonitoring: boolean,
     preferredQuality: string,
-    segmentDurationMins: number
+    segmentDurationMins: number,
+    platform: string = "douyin"
   ) => {
     await invoke("add_room", {
       url,
       isMonitoring,
       preferredQuality,
       segmentDurationMins,
+      platform,
     });
     await fetchConfig();
   };
@@ -230,7 +232,7 @@ function App() {
   const handleCheckRoomStatus = async (room: RoomConfig) => {
     setCheckingRooms((prev) => ({ ...prev, [room.room_id]: true }));
     try {
-      const info = await invoke<LiveRoomInfo>("parse_room", { url: room.room_id });
+      const info = await invoke<LiveRoomInfo>("parse_room", { url: room.room_id, platform: room.platform });
       setRoomStatuses((prev) => {
         const prevStatus = prev[room.room_id];
         const nextTitle = info.is_live ? info.title : (prevStatus?.title || info.title);

@@ -24,7 +24,11 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   useEffect(() => {
     if (isOpen && room) {
       const q = room.preferred_quality || "";
-      const mapped = q === "原画" ? "origin" : q === "蓝光" ? "blue_ray" : q === "超清" ? "uhd" : q === "高清" ? "hd" : q === "标清" ? "sd" : q || "origin";
+      let mapped = q === "原画" ? "origin" : q === "蓝光" ? "blue_ray" : q === "超清" ? "uhd" : q === "高清" ? "hd" : q === "标清" ? "sd" : q || "origin";
+      // B站不支持高清和标清，若配置不合理则自动纠正到超清
+      if (room.platform === "bilibili" && (mapped === "hd" || mapped === "sd")) {
+        mapped = "uhd";
+      }
       setQuality(mapped);
       setSegmentMins(room.segment_duration_mins || 0);
       setIsMonitoring(room.is_monitoring ?? false);
@@ -95,8 +99,12 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                 <option value="origin">原画</option>
                 <option value="blue_ray">蓝光</option>
                 <option value="uhd">超清</option>
-                <option value="hd">高清</option>
-                <option value="sd">标清</option>
+                {room.platform !== "bilibili" && (
+                  <>
+                    <option value="hd">高清</option>
+                    <option value="sd">标清</option>
+                  </>
+                )}
               </select>
             </div>
             <div className="form-group" style={{ flex: 1 }}>
