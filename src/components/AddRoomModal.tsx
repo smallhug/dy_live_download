@@ -81,10 +81,13 @@ export const AddRoomModal: React.FC<AddRoomModalProps> = ({
                 type="text"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
-                placeholder="例如: 510200350291"
+                placeholder=""
                 disabled={isLoading}
                 required
               />
+              <p style={{ fontSize: "11.5px", color: "#94a3b8", marginTop: "6px", marginBottom: 0, lineHeight: "1.4" }}>
+                提示：直播间ID为网页地址中“.com/”和“?”之间的数字
+              </p>
             </div>
           </div>
 
