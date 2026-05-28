@@ -40,6 +40,7 @@ pub fn start_monitor_loop(app: AppHandle) {
                             autostart: false,
                             silent_start: false,
                             close_to_tray: false,
+                            has_seen_guide: false,
                         },
                         Vec::new(),
                     )

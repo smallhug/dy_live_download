@@ -94,16 +94,16 @@ body {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  padding-left: 15px;
-  /* 让直径 14px 的 logo 保持在中轴线 36px 处 (14px padding + 15px + 7px = 36px) */
+  padding-left: 6px;
+  /* 让直径 32px 的 logo 保持在中轴线 36px 处 (14px padding + 6px + 16px = 36px) */
   margin-bottom: 32px;
   width: 100%;
 }
 
 .logo-indicator {
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
   object-fit: contain;
   transition: transform 0.25s ease;
 }
@@ -398,20 +398,43 @@ body {
 }
 
 @keyframes recordingPulse {
-  0%, 100% { box-shadow: 0 6px 20px rgba(239, 68, 68, 0.05); }
-  50% { box-shadow: 0 6px 20px rgba(239, 68, 68, 0.15); }
+
+  0%,
+  100% {
+    box-shadow: 0 6px 20px rgba(239, 68, 68, 0.05);
+  }
+
+  50% {
+    box-shadow: 0 6px 20px rgba(239, 68, 68, 0.15);
+  }
 }
 
 @keyframes recordStart {
-  0% { border-color: #2563eb; }
-  50% { border-color: #f87171; }
-  100% { border-color: #fca5a5; }
+  0% {
+    border-color: #2563eb;
+  }
+
+  50% {
+    border-color: #f87171;
+  }
+
+  100% {
+    border-color: #fca5a5;
+  }
 }
 
 @keyframes recordStop {
-  0% { border-color: #fca5a5; }
-  50% { border-color: #93c5fd; }
-  100% { border-color: #e2e8f0; }
+  0% {
+    border-color: #fca5a5;
+  }
+
+  50% {
+    border-color: #93c5fd;
+  }
+
+  100% {
+    border-color: #e2e8f0;
+  }
 }
 
 .room-card.is-recording::after {
@@ -426,8 +449,13 @@ body {
 }
 
 @keyframes borderScan {
-  0% { transform: translateX(-100%); }
-  100% { transform: translateX(100%); }
+  0% {
+    transform: translateX(-100%);
+  }
+
+  100% {
+    transform: translateX(100%);
+  }
 }
 
 /* 卡片头部 */
@@ -988,4 +1016,15 @@ body {
 .room-card .card-actions {
   position: relative;
   z-index: 1;
+}
+
+/* 侧边栏底部 GitHub 图标样式 */
+.github-btn {
+  color: #64748b;
+  transition: color 0.2s ease, background-color 0.2s ease;
+}
+
+.github-btn:hover {
+  color: #0f172a;
+  background-color: #f1f5f9;
 }

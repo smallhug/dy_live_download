@@ -10,12 +10,15 @@ import DashboardPage from "./pages/DashboardPage";
 import CredentialsPage from "./pages/CredentialsPage";
 import ConverterPage from "./pages/ConverterPage";
 import SettingsPage from "./pages/SettingsPage";
+import { OnboardingGuide } from "./components/OnboardingGuide";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { 
   RefreshIcon, 
   SettingsIcon, 
   TvIcon, 
   PlusIcon,
   KeyIcon,
+  GithubIcon,
 } from "./components/Icons";
 import "./App.css";
 
@@ -80,6 +83,14 @@ const TelemetryBar: React.FC<TelemetryBarProps> = ({ onlineCount, activeRecordCo
 };
 
 function App() {
+  const handleOpenGithub = useCallback(async () => {
+    try {
+      await openUrl("https://github.com/smallhug");
+    } catch (err) {
+      console.error("无法打开 Github 链接:", err);
+    }
+  }, []);
+
   // ── 核心框架状态 ──────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<"dashboard" | "credentials" | "converter" | "settings">("dashboard");
   const [searchQuery, setSearchQuery] = useState("");
@@ -336,6 +347,7 @@ function App() {
         autostart: currentConfig.global.autostart,
         silent_start: currentConfig.global.silent_start,
         close_to_tray: currentConfig.global.close_to_tray,
+        has_seen_guide: currentConfig.global.has_seen_guide,
         ...patch
       };
       await invoke("update_global_config", {
@@ -348,6 +360,7 @@ function App() {
         autostart: fullConfig.autostart,
         silentStart: fullConfig.silent_start,
         closeToTray: fullConfig.close_to_tray,
+        hasSeenGuide: fullConfig.has_seen_guide,
       });
       await fetchConfig();
     } catch (err) {
@@ -409,6 +422,15 @@ function App() {
               <SettingsIcon size={22} />
             </button>
           </nav>
+
+          <button 
+            className="nav-item github-btn"
+            onClick={handleOpenGithub}
+            title="关于作者"
+            style={{ marginTop: "auto" }}
+          >
+            <GithubIcon size={22} />
+          </button>
         </aside>
       </div>
 
@@ -530,6 +552,15 @@ function App() {
           cancelText={dialogState.cancelText}
           onConfirm={() => { dialogState.resolve(true); setDialogState(null); }}
           onCancel={() => { dialogState.resolve(false); setDialogState(null); }}
+        />
+      )}
+
+      {/* 首次启动操作引导页 */}
+      {config && config.global.has_seen_guide === false && (
+        <OnboardingGuide
+          onComplete={async () => {
+            await handleSaveGlobalConfig({ has_seen_guide: true });
+          }}
         />
       )}
     </div>

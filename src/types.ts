@@ -17,6 +17,7 @@ export interface GlobalConfig {
   autostart: boolean;
   silent_start: boolean;
   close_to_tray: boolean;
+  has_seen_guide: boolean;
 }
 
 export interface RoomConfig {

@@ -31,7 +31,6 @@ fn get_config(state: State<'_, AppConfigState>) -> AppConfig {
     state.0.read().unwrap().clone()
 }
 
-// 2. 保存全局配置
 #[tauri::command]
 fn update_global_config(
     app: AppHandle,
@@ -45,6 +44,7 @@ fn update_global_config(
     autostart: bool,
     silent_start: bool,
     close_to_tray: bool,
+    has_seen_guide: bool,
 ) -> Result<(), String> {
     let mut config = state.0.write().unwrap();
     config.global.ffmpeg_path = ffmpeg_path;
@@ -56,6 +56,7 @@ fn update_global_config(
     config.global.autostart = autostart;
     config.global.silent_start = silent_start;
     config.global.close_to_tray = close_to_tray;
+    config.global.has_seen_guide = has_seen_guide;
     save_config(&app, &config)?;
 
     // 联动更新系统开机自启动设置

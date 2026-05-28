@@ -19,6 +19,8 @@ pub struct GlobalConfig {
     pub silent_start: bool,
     #[serde(default)]
     pub close_to_tray: bool,
+    #[serde(default)]
+    pub has_seen_guide: bool,
 }
 
 fn default_true() -> bool {
@@ -73,6 +75,7 @@ impl Default for AppConfig {
                 autostart: false,
                 silent_start: false,
                 close_to_tray: false,
+                has_seen_guide: false,
             },
             rooms: Vec::new(),
         }
