@@ -333,6 +333,9 @@ function App() {
         user_agent: currentConfig.global.user_agent,
         sec_ch_ua: currentConfig.global.sec_ch_ua,
         monitor_interval_secs: currentConfig.global.monitor_interval_secs,
+        autostart: currentConfig.global.autostart,
+        silent_start: currentConfig.global.silent_start,
+        close_to_tray: currentConfig.global.close_to_tray,
         ...patch
       };
       await invoke("update_global_config", {
@@ -342,6 +345,9 @@ function App() {
         userAgent: fullConfig.user_agent,
         secChUa: fullConfig.sec_ch_ua,
         monitorIntervalSecs: fullConfig.monitor_interval_secs,
+        autostart: fullConfig.autostart,
+        silentStart: fullConfig.silent_start,
+        closeToTray: fullConfig.close_to_tray,
       });
       await fetchConfig();
     } catch (err) {
@@ -476,8 +482,8 @@ function App() {
           {activeTab === "settings" && (
             <SettingsPage
               config={config}
-              onSave={async ({ save_dir, ffmpeg_path, monitor_interval_secs }) => {
-                await handleSaveGlobalConfig({ save_dir, ffmpeg_path, monitor_interval_secs });
+              onSave={async ({ save_dir, ffmpeg_path, monitor_interval_secs, autostart, silent_start, close_to_tray }) => {
+                await handleSaveGlobalConfig({ save_dir, ffmpeg_path, monitor_interval_secs, autostart, silent_start, close_to_tray });
               }}
               showAlert={alertAsync}
             />

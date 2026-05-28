@@ -5,19 +5,32 @@ import { FolderIcon, TimerIcon, LoadingIcon, CheckIcon } from "../components/Ico
 
 interface SettingsPageProps {
   config: AppConfig | null;
-  onSave: (data: { save_dir: string; ffmpeg_path: string; monitor_interval_secs: number }) => Promise<void>;
+  onSave: (data: { 
+    save_dir: string; 
+    ffmpeg_path: string; 
+    monitor_interval_secs: number;
+    autostart: boolean;
+    silent_start: boolean;
+    close_to_tray: boolean;
+  }) => Promise<void>;
   showAlert: (message: string, title?: string, kind?: "info" | "error" | "warning") => Promise<boolean>;
 }
 
 export default function SettingsPage({ config, onSave, showAlert }: SettingsPageProps) {
   const [settingsSaveDir, setSettingsSaveDir] = useState("");
   const [settingsMonitorInterval, setSettingsMonitorInterval] = useState(60);
+  const [autostart, setAutostart] = useState(false);
+  const [silentStart, setSilentStart] = useState(false);
+  const [closeToTray, setCloseToTray] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
 
   useEffect(() => {
     if (config?.global) {
       setSettingsSaveDir(config.global.save_dir);
       setSettingsMonitorInterval(config.global.monitor_interval_secs);
+      setAutostart(!!config.global.autostart);
+      setSilentStart(!!config.global.silent_start);
+      setCloseToTray(!!config.global.close_to_tray);
     }
   }, [config]);
 
@@ -36,6 +49,13 @@ export default function SettingsPage({ config, onSave, showAlert }: SettingsPage
     }
   };
 
+  const handleAutostartChange = (checked: boolean) => {
+    setAutostart(checked);
+    if (!checked) {
+      setSilentStart(false);
+    }
+  };
+
   const handleSaveSettingsPage = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSavingSettings(true);
@@ -44,6 +64,9 @@ export default function SettingsPage({ config, onSave, showAlert }: SettingsPage
         save_dir: settingsSaveDir,
         ffmpeg_path: config?.global.ffmpeg_path ?? "",
         monitor_interval_secs: settingsMonitorInterval,
+        autostart,
+        silent_start: silentStart,
+        close_to_tray: closeToTray,
       });
       await showAlert("设置保存成功并已立即生效！", "系统设置", "info");
     } catch (err) {
@@ -104,6 +127,73 @@ export default function SettingsPage({ config, onSave, showAlert }: SettingsPage
               required
               style={{ width: "100%", fontSize: "13px", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1" }}
             />
+          </div>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: "16px", borderTop: "1px solid #e2e8f0", paddingTop: "20px" }}>
+          <h4 style={{ fontSize: "13.5px", fontWeight: "600", color: "#0f172a", margin: "0 0 4px 0" }}>
+            系统运行行为
+          </h4>
+          
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "12px", borderBottom: "1px solid #f1f5f9" }}>
+            <div style={{ flex: 1, paddingRight: "32px" }}>
+              <label htmlFor="closeToTrayCheckbox" style={{ fontSize: "13px", fontWeight: "500", color: "#1e293b", cursor: "pointer" }}>
+                点击窗口关闭按钮时最小化到系统托盘
+              </label>
+              <p style={{ fontSize: "11px", color: "#94a3b8", marginTop: "4px", margin: 0, lineHeight: "1.4" }}>
+                启用后，点击主窗口右上角的关闭 [X] 按钮程序不会退出，而是隐藏至系统托盘，并继续在后台执行录制或监控任务。
+              </p>
+            </div>
+            <div>
+              <input
+                id="closeToTrayCheckbox"
+                type="checkbox"
+                checked={closeToTray}
+                onChange={(e) => setCloseToTray(e.target.checked)}
+                style={{ width: "16px", height: "16px", cursor: "pointer", accentColor: "#2563eb" }}
+              />
+            </div>
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "12px", borderBottom: "1px solid #f1f5f9" }}>
+            <div style={{ flex: 1, paddingRight: "32px" }}>
+              <label htmlFor="autostartCheckbox" style={{ fontSize: "13px", fontWeight: "500", color: "#1e293b", cursor: "pointer" }}>
+                开机自动启动
+              </label>
+              <p style={{ fontSize: "11px", color: "#94a3b8", marginTop: "4px", margin: 0, lineHeight: "1.4" }}>
+                启用后，本程序将在您开机进入 Windows 系统时自动运行。
+              </p>
+            </div>
+            <div>
+              <input
+                id="autostartCheckbox"
+                type="checkbox"
+                checked={autostart}
+                onChange={(e) => handleAutostartChange(e.target.checked)}
+                style={{ width: "16px", height: "16px", cursor: "pointer", accentColor: "#2563eb" }}
+              />
+            </div>
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "12px", opacity: autostart ? 1 : 0.5 }}>
+            <div style={{ flex: 1, paddingRight: "32px" }}>
+              <label htmlFor="silentStartCheckbox" style={{ fontSize: "13px", fontWeight: "500", color: autostart ? "#1e293b" : "#64748b", cursor: autostart ? "pointer" : "not-allowed" }}>
+                自启动时隐藏主窗口 (静默启动)
+              </label>
+              <p style={{ fontSize: "11px", color: "#94a3b8", marginTop: "4px", margin: 0, lineHeight: "1.4" }}>
+                启用后，开机自动运行本程序时将不会弹出主窗口，仅在托盘区保留图标并静默工作。双击托盘图标可展开界面。(需先勾选开机自启动)
+              </p>
+            </div>
+            <div>
+              <input
+                id="silentStartCheckbox"
+                type="checkbox"
+                checked={silentStart}
+                disabled={!autostart}
+                onChange={(e) => setSilentStart(e.target.checked)}
+                style={{ width: "16px", height: "16px", cursor: autostart ? "pointer" : "not-allowed", accentColor: "#2563eb" }}
+              />
+            </div>
           </div>
         </div>
 

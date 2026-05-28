@@ -10,6 +10,8 @@ use parsers::LiveRoomInfo;
 use recorder::{get_active_recordings, start_recording, stop_recording, RecorderState};
 use serde::{Deserialize, Serialize};
 use log::{info, warn, error};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 fn truncate_str(s: &str, max_chars: usize) -> &str {
     match s.char_indices().nth(max_chars) {
@@ -18,6 +20,8 @@ fn truncate_str(s: &str, max_chars: usize) -> &str {
     }
 }
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::tray::{TrayIconBuilder, TrayIconEvent, MouseButton, MouseButtonState};
+use tauri::menu::{Menu, MenuItem};
 
 pub struct HttpClientState(pub reqwest::Client);
 
@@ -38,6 +42,9 @@ fn update_global_config(
     user_agent: String,
     sec_ch_ua: String,
     monitor_interval_secs: u64,
+    autostart: bool,
+    silent_start: bool,
+    close_to_tray: bool,
 ) -> Result<(), String> {
     let mut config = state.0.write().unwrap();
     config.global.ffmpeg_path = ffmpeg_path;
@@ -46,7 +53,20 @@ fn update_global_config(
     config.global.user_agent = user_agent;
     config.global.sec_ch_ua = sec_ch_ua;
     config.global.monitor_interval_secs = monitor_interval_secs;
-    save_config(&app, &config)
+    config.global.autostart = autostart;
+    config.global.silent_start = silent_start;
+    config.global.close_to_tray = close_to_tray;
+    save_config(&app, &config)?;
+
+    // 联动更新系统开机自启动设置
+    if let Some(autostart_manager) = app.try_state::<tauri_plugin_autostart::AutoLaunchManager>() {
+        if autostart {
+            let _ = autostart_manager.enable();
+        } else {
+            let _ = autostart_manager.disable();
+        }
+    }
+    Ok(())
 }
 
 // 3. 解析直播间基本信息（用于手动状态检测，使用 Cookie 以防滑块拦截）
@@ -779,10 +799,33 @@ async fn validate_cookie(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .manage(RecorderState::new())
+        .on_menu_event(|app, event| {
+            info!("全局菜单事件触发: ID={}", event.id.as_ref());
+            match event.id.as_ref() {
+                "show" => {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                }
+                "quit" => {
+                    info!("收到退出菜单点击，触发 app.exit(0)");
+                    app.exit(0);
+                }
+                _ => {}
+            }
+        })
         .setup(|app| {
             let app_handle = app.handle().clone();
 
@@ -791,7 +834,7 @@ pub fn run() {
 
             // 初始化并载入配置
             let initial_config = load_config(&app_handle);
-            app.manage(AppConfigState(std::sync::RwLock::new(initial_config)));
+            app.manage(AppConfigState(std::sync::RwLock::new(initial_config.clone())));
 
             // 初始化并托管全局 HTTP 客户端
             let client = reqwest::Client::builder()
@@ -799,6 +842,81 @@ pub fn run() {
                 .build()
                 .expect("Failed to build global HTTP client");
             app.manage(HttpClientState(client));
+
+            // 1. 静默启动隐藏窗口处理
+            let args: Vec<String> = std::env::args().collect();
+            let is_minimized = args.contains(&"--minimized".to_string());
+            if is_minimized && initial_config.global.silent_start {
+                info!("检测到自启动/静默启动参数 --minimized，隐藏主窗口");
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
+
+            // 2. 窗口关闭到托盘监听
+            if let Some(window) = app.get_webview_window("main") {
+                let app_handle_clone = app_handle.clone();
+                let window_clone = window.clone();
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        let close_to_tray = {
+                            let state = app_handle_clone.state::<AppConfigState>();
+                            let config = state.0.read().unwrap();
+                            config.global.close_to_tray
+                        };
+                        if close_to_tray {
+                            api.prevent_close();
+                            let _ = window_clone.hide();
+                            info!("主窗口已隐藏到系统托盘");
+                        }
+                    }
+                });
+            }
+
+            // 3. 初始化系统托盘图标
+            let show_i = MenuItem::with_id(&app_handle, "show", "显示主界面", true, None::<&str>)?;
+            let quit_i = MenuItem::with_id(&app_handle, "quit", "退出应用", true, None::<&str>)?;
+            let tray_menu = Menu::with_items(&app_handle, &[&show_i, &quit_i])?;
+
+            let mut tray_builder = TrayIconBuilder::new()
+                .menu(&tray_menu)
+                .on_menu_event(|app, event| {
+                    info!("托盘菜单事件触发: ID={}", event.id.as_ref());
+                    match event.id.as_ref() {
+                        "show" => {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                        "quit" => {
+                            info!("托盘收到退出菜单点击，触发 app.exit(0)");
+                            app.exit(0);
+                        }
+                        _ => {}
+                    }
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                });
+
+            if let Some(icon) = app_handle.default_window_icon() {
+                tray_builder = tray_builder.icon(icon.clone());
+            }
+
+            let tray = tray_builder.build(app)?;
+            app.manage(tray);
 
             monitor::start_monitor_loop(app_handle.clone());
             telemetry::start_telemetry_loop(app_handle);
@@ -822,6 +940,59 @@ pub fn run() {
             validate_cookie,
             convert_video
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    let is_exiting = Arc::new(AtomicBool::new(false));
+
+    app.run(move |app_handle, event| {
+        if let tauri::RunEvent::ExitRequested { api, .. } = event {
+            if is_exiting.load(Ordering::SeqCst) {
+                return;
+            }
+            is_exiting.store(true, Ordering::SeqCst);
+            api.prevent_exit();
+            let app_handle_clone = app_handle.clone();
+            
+            tauri::async_runtime::spawn(async move {
+                info!("应用收到退出指令，正在执行优雅停机...");
+                let recorder_state = app_handle_clone.state::<RecorderState>();
+                let mut tasks = recorder_state.tasks.lock().await;
+                
+                // 1. 发送 'q' 信号优雅退出 FFmpeg
+                for (room_id, task) in tasks.iter_mut() {
+                    info!("给任务 {} 的子进程发送优雅退出信号", room_id);
+                    if let Some(mut stdin) = task.child.stdin.take() {
+                        let _ = tokio::spawn(async move {
+                            use tokio::io::AsyncWriteExt;
+                            let _ = stdin.write_all(b"q").await;
+                            let _ = stdin.flush().await;
+                        });
+                    }
+                }
+                
+                // 2. 收集进程句柄并排空
+                let mut children = vec![];
+                for (_, task) in tasks.drain() {
+                    children.push(task.child);
+                }
+                drop(tasks); // 提早释放锁
+                
+                // 3. 超时等待 5 秒
+                let wait_all = async move {
+                    for mut child in children {
+                        let _ = child.wait().await;
+                    }
+                };
+                
+                match tokio::time::timeout(std::time::Duration::from_secs(5), wait_all).await {
+                    Ok(_) => info!("所有录制子进程优雅退出完成"),
+                    Err(_) => warn!("等待录制子进程优雅退出超时，执行强制停机"),
+                }
+                
+                // 4. 退出应用
+                app_handle_clone.exit(0);
+            });
+        }
+    });
 }

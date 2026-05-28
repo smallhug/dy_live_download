@@ -1,7 +1,6 @@
 use log::LevelFilter;
 use simplelog::{CombinedLogger, WriteLogger};
 use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
 use tauri::{AppHandle, Manager};
 
 const MAX_LOG_SIZE: u64 = 10 * 1024 * 1024;

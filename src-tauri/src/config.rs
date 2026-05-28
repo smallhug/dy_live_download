@@ -13,6 +13,12 @@ pub struct GlobalConfig {
     pub user_agent: String,
     pub sec_ch_ua: String,
     pub monitor_interval_secs: u64,
+    #[serde(default)]
+    pub autostart: bool,
+    #[serde(default)]
+    pub silent_start: bool,
+    #[serde(default)]
+    pub close_to_tray: bool,
 }
 
 fn default_true() -> bool {
@@ -64,6 +70,9 @@ impl Default for AppConfig {
                 user_agent: "".to_string(),
                 sec_ch_ua: "".to_string(),
                 monitor_interval_secs: 180,
+                autostart: false,
+                silent_start: false,
+                close_to_tray: false,
             },
             rooms: Vec::new(),
         }

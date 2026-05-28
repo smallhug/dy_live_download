@@ -14,6 +14,9 @@ export interface GlobalConfig {
   user_agent: string;
   sec_ch_ua: string;
   monitor_interval_secs: number;
+  autostart: boolean;
+  silent_start: boolean;
+  close_to_tray: boolean;
 }
 
 export interface RoomConfig {
