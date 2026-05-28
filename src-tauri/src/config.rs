@@ -166,9 +166,14 @@ pub fn load_config(app: &AppHandle) -> AppConfig {
 // 保存配置
 pub fn save_config(app: &AppHandle, config: &AppConfig) -> Result<(), String> {
     let path = get_config_path(app);
+    let tmp_path = path.with_extension("tmp");
     let content = serde_json::to_string_pretty(config)
         .map_err(|e| format!("序列化配置失败: {}", e))?;
-    fs::write(path, content)
+    fs::write(&tmp_path, content)
+        .map_err(|e| format!("写入临时配置文件失败: {}", e))?;
+    fs::rename(tmp_path, path)
         .map_err(|e| format!("保存配置文件失败: {}", e))?;
     Ok(())
 }
+
+pub struct AppConfigState(pub std::sync::RwLock<AppConfig>);

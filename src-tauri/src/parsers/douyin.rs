@@ -14,13 +14,14 @@ pub struct DouyinParser;
 impl LiveParser for DouyinParser {
     async fn parse(
         &self,
+        client: &reqwest::Client,
         room_id: &str,
         cookie: &str,
         user_agent: &str,
         sec_ch_ua: &str,
-        _preferred_quality: &str, // 占位符，抖音一次性返回全部画质无需单独请求
+        _preferred_quality: &str,
     ) -> Result<LiveRoomInfo, String> {
-        parse_douyin_live(room_id, cookie, user_agent, sec_ch_ua).await
+        parse_douyin_live(client, room_id, cookie, user_agent, sec_ch_ua).await
     }
 }
 
@@ -62,6 +63,7 @@ fn map_quality_name(key: &str) -> String {
 }
 
 pub async fn parse_douyin_live(
+    client: &reqwest::Client,
     room_url: &str,
     cookie: &str,
     user_agent: &str,
@@ -106,14 +108,9 @@ pub async fn parse_douyin_live(
     headers.insert("sec-fetch-site", "same-origin".parse().unwrap());
     headers.insert("upgrade-insecure-requests", "1".parse().unwrap());
 
-    let client = reqwest::Client::builder()
-        .user_agent(actual_ua)
-        .default_headers(headers)
-        .timeout(Duration::from_secs(15))
-        .build()
-        .map_err(|e| format!("构建HTTP客户端失败: {}", e))?;
-
-    let mut request = client.get(&actual_url);
+    let mut request = client.get(&actual_url)
+        .headers(headers)
+        .header(reqwest::header::USER_AGENT, actual_ua);
     if !cookie.trim().is_empty() {
         request = request.header("Cookie", cookie);
     }
@@ -305,20 +302,18 @@ pub async fn parse_douyin_live(
     })
 }
 
-pub async fn fetch_nickname_from_cookie(cookie: &str, user_agent: &str) -> Option<String> {
+pub async fn fetch_nickname_from_cookie(client: &reqwest::Client, cookie: &str, user_agent: &str) -> Option<String> {
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8".parse().unwrap());
     headers.insert("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8".parse().unwrap());
     headers.insert("Cookie", cookie.parse().ok()?);
 
-    let client = reqwest::Client::builder()
-        .user_agent(user_agent)
-        .default_headers(headers)
-        .timeout(Duration::from_secs(8))
-        .build()
+    let res = client.get("https://www.douyin.com/")
+        .headers(headers)
+        .header(reqwest::header::USER_AGENT, user_agent)
+        .send()
+        .await
         .ok()?;
-
-    let res = client.get("https://www.douyin.com/").send().await.ok()?;
     let html = res.text().await.ok()?;
 
     // 匹配个人中心或抖音首页中的 title
@@ -344,7 +339,8 @@ mod tests {
     #[tokio::test]
     async fn test_offline_room() {
         let room_id = "510200350291";
-        let res = parse_douyin_live(room_id, "", "", "").await;
+        let client = reqwest::Client::new();
+        let res = parse_douyin_live(&client, room_id, "", "", "").await;
         assert!(res.is_ok());
         let info = res.unwrap();
         assert_eq!(info.is_live, false);

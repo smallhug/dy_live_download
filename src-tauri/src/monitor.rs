@@ -1,4 +1,4 @@
-use crate::config::{load_config, RoomConfig};
+use crate::config::{load_config, RoomConfig, AppConfigState};
 use crate::parsers;
 use crate::recorder::{start_recording, RecorderState};
 use log::{info, error};
@@ -17,16 +17,26 @@ pub fn start_monitor_loop(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
             // 获取当前配置
-            let config = load_config(&app);
-            let global = config.global.clone();
-
-            // 过滤出需要监控的房间
-            let monitoring_rooms: Vec<RoomConfig> = config
-                .rooms
-                .iter()
-                .filter(|r| r.is_monitoring)
-                .cloned()
-                .collect();
+            let (global, monitoring_rooms) = if let Some(config_state) = app.try_state::<AppConfigState>() {
+                let config = config_state.0.read().unwrap();
+                let global = config.global.clone();
+                let monitoring_rooms: Vec<RoomConfig> = config
+                    .rooms
+                    .iter()
+                    .filter(|r| r.is_monitoring)
+                    .cloned()
+                    .collect();
+                (global, monitoring_rooms)
+            } else {
+                (crate::config::GlobalConfig {
+                    ffmpeg_path: "".to_string(),
+                    save_dir: "".to_string(),
+                    cookies: Vec::new(),
+                    user_agent: "".to_string(),
+                    sec_ch_ua: "".to_string(),
+                    monitor_interval_secs: 180,
+                }, Vec::new())
+            };
 
             if !monitoring_rooms.is_empty() {
                 // 获取当前正在录制的任务
@@ -48,9 +58,19 @@ pub fn start_monitor_loop(app: AppHandle) {
                     let global_clone = global.clone();
 
                     // 异步拉起检测，防止阻塞其他房间检测
-                    let cookie = crate::get_and_increment_cookie(&app_clone, &room_clone.platform);
+                    let cookie = if let Some(config_state) = app_clone.try_state::<AppConfigState>() {
+                        crate::get_and_increment_cookie(&app_clone, &config_state, &room_clone.platform)
+                    } else {
+                        "".to_string()
+                    };
+                    let client = if let Some(http_state) = app_clone.try_state::<crate::HttpClientState>() {
+                        http_state.0.clone()
+                    } else {
+                        reqwest::Client::new()
+                    };
                     tauri::async_runtime::spawn(async move {
                         match parsers::parse_live(
+                            &client,
                             &room_clone.platform,
                             &room_clone.room_id,
                             &cookie,  // 使用已保存的 Cookie 进行状态检测以防止滑块拦截

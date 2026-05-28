@@ -1,9 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { CookieItem, AppConfig } from "../types";
 import { KeyIcon, CheckIcon, LoadingIcon, GlobeIcon, PlusIcon, TrashIcon } from "../components/Icons";
-import { DialogModal, DialogOptions } from "../components/DialogModal";
 import { formatDateTime } from "../utils";
 
 type LoginFlowState = "idle" | "opening" | "waiting_login" | "capturing" | "done" | "error";
@@ -33,12 +32,14 @@ const LoginStep: React.FC<{ step: number; label: string; state: "pending" | "act
 interface CredentialsPageProps {
   config: AppConfig | null;
   onSaveCookies: (cookies: CookieItem[]) => Promise<void>;
+  confirmAsync: (message: string, title?: string) => Promise<boolean>;
+  alertAsync: (message: string, title?: string, kind?: "info" | "error" | "warning") => Promise<boolean>;
 }
 
-export default function CredentialsPage({ config, onSaveCookies }: CredentialsPageProps) {
+export default function CredentialsPage({ config, onSaveCookies, confirmAsync, alertAsync }: CredentialsPageProps) {
   const [loginFlow, setLoginFlow] = useState<LoginFlowState>("idle");
   const [loginFlowMsg, setLoginFlowMsg] = useState("");
-  const [loginPollTimer, setLoginPollTimer] = useState<ReturnType<typeof setInterval> | null>(null);
+  const loginPollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const [showManualInput, setShowManualInput] = useState(false);
   const [manualNickname, setManualNickname] = useState("");
   const [manualCookieValue, setManualCookieValue] = useState("");
@@ -48,25 +49,16 @@ export default function CredentialsPage({ config, onSaveCookies }: CredentialsPa
   const [pendingCookie, setPendingCookie] = useState<string | null>(null);
   const [pendingNickname, setPendingNickname] = useState("");
 
-  const [dialogState, setDialogState] = useState<(DialogOptions & { resolve: (v: boolean) => void }) | null>(null);
-
-  const showDialog = (opts: DialogOptions): Promise<boolean> => {
-    return new Promise((resolve) => {
-      setDialogState({ ...opts, resolve });
-    });
-  };
-
-  const confirmAsync = (message: string, title?: string) => {
-    return showDialog({ type: "confirm", message, title });
-  };
-
   useEffect(() => {
     return () => {
-      if (loginPollTimer) {
-        clearInterval(loginPollTimer);
+      if (loginPollTimer.current) {
+        clearInterval(loginPollTimer.current);
       }
+      // 卸载组件时自动关闭任何开启的登录窗口，避免悬挂窗口
+      WebviewWindow.getByLabel("douyin-login").then((win) => win && win.close());
+      WebviewWindow.getByLabel("bilibili-login").then((win) => win && win.close());
     };
-  }, [loginPollTimer]);
+  }, []);
 
   const [activeLoginPlatform, setActiveLoginPlatform] = useState<"douyin" | "bilibili">("douyin");
 
@@ -83,15 +75,17 @@ export default function CredentialsPage({ config, onSaveCookies }: CredentialsPa
         try {
           const loggedIn = await invoke<boolean>("check_login_status", { platform });
           if (loggedIn) {
-            clearInterval(timer);
-            setLoginPollTimer(null);
+            if (loginPollTimer.current) {
+              clearInterval(loginPollTimer.current);
+              loginPollTimer.current = null;
+            }
             await finishLoginFlow(platform);
           }
         } catch (err) {
           console.warn("轮询登录状态失败:", err);
         }
       }, 2000);
-      setLoginPollTimer(timer);
+      loginPollTimer.current = timer;
     } catch (err: any) {
       setLoginFlow("error");
       setLoginFlowMsg("打开登录窗口失败: " + err.toString());
@@ -99,9 +93,9 @@ export default function CredentialsPage({ config, onSaveCookies }: CredentialsPa
   };
 
   const cancelLoginFlow = async () => {
-    if (loginPollTimer) {
-      clearInterval(loginPollTimer);
-      setLoginPollTimer(null);
+    if (loginPollTimer.current) {
+      clearInterval(loginPollTimer.current);
+      loginPollTimer.current = null;
     }
     try {
       const windowLabel = activeLoginPlatform === "bilibili" ? "bilibili-login" : "douyin-login";
@@ -167,7 +161,7 @@ export default function CredentialsPage({ config, onSaveCookies }: CredentialsPa
       await onSaveCookies([...currentCookies, newCookie]);
     } catch (err) {
       console.error("保存凭证失败:", err);
-      alert("保存凭证失败: " + err);
+      alertAsync("保存凭证失败: " + err, "错误", "error");
       return;
     }
     setShowNicknameModal(false);
@@ -412,19 +406,6 @@ export default function CredentialsPage({ config, onSaveCookies }: CredentialsPa
         </div>
       )}
 
-      {dialogState && (
-        <DialogModal
-          isOpen={!!dialogState}
-          type={dialogState.type}
-          title={dialogState.title}
-          message={dialogState.message}
-          kind={dialogState.kind}
-          confirmText={dialogState.confirmText}
-          cancelText={dialogState.cancelText}
-          onConfirm={() => { dialogState.resolve(true); setDialogState(null); }}
-          onCancel={() => { dialogState.resolve(false); setDialogState(null); }}
-        />
-      )}
     </div>
   );
 }

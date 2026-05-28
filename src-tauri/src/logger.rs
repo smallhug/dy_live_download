@@ -16,19 +16,14 @@ fn rotate_if_needed(path: &std::path::Path) {
         return;
     }
 
-    let mut content = String::new();
-    if let Ok(mut f) = fs::File::open(path) {
-        let _ = f.read_to_string(&mut content);
+    let mut backup_path = path.to_path_buf();
+    backup_path.set_extension("log.old");
+
+    if backup_path.exists() {
+        let _ = fs::remove_file(&backup_path);
     }
 
-    let lines: Vec<&str> = content.lines().collect();
-    let keep_from = lines.len() / 2;
-    let remaining: String = lines[keep_from..].join("\n");
-
-    if let Ok(mut f) = fs::File::create(path) {
-        let _ = f.write_all(remaining.as_bytes());
-        let _ = f.write_all(b"\n");
-    }
+    let _ = fs::rename(path, backup_path);
 }
 
 pub fn init_logger(app: &AppHandle) {

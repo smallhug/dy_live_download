@@ -59,6 +59,7 @@ export default function ConverterPage({ config }: ConverterPageProps) {
   const [convertOutputPath, setConvertOutputPath] = useState("");
   const [convertTasks, setConvertTasks] = useState<ConvertTask[]>([]);
   const [isConverting, setIsConverting] = useState(false);
+  const [isOutputDirty, setIsOutputDirty] = useState(false);
 
   useEffect(() => {
     const unlistenConvert = listen<ConvertProgressPayload>("convert-progress", (event) => {
@@ -76,10 +77,15 @@ export default function ConverterPage({ config }: ConverterPageProps) {
   }, []);
 
   useEffect(() => {
-    if (config?.global) {
+    if (!isOutputDirty && config?.global?.save_dir) {
       setConvertOutputPath(guessOutputPath(convertInputPath, convertOutputExt, config.global.save_dir));
     }
-  }, [convertInputPath, convertOutputExt, config]);
+  }, [convertInputPath, convertOutputExt, config?.global?.save_dir, isOutputDirty]);
+
+  // 当选择新的源文件或格式时，重置 dirty 标记以重新开始自动推导
+  useEffect(() => {
+    setIsOutputDirty(false);
+  }, [convertInputPath, convertOutputExt]);
 
   const handleBrowseConvertInput = async () => {
     const selected = await openDialog({
@@ -107,6 +113,7 @@ export default function ConverterPage({ config }: ConverterPageProps) {
     });
     if (result) {
       setConvertOutputPath(result);
+      setIsOutputDirty(true);
     }
   };
 
@@ -199,7 +206,10 @@ export default function ConverterPage({ config }: ConverterPageProps) {
               type="text"
               placeholder="请输入或浏览选择输出的文件名..."
               value={convertOutputPath}
-              onChange={(e) => setConvertOutputPath(e.target.value)}
+              onChange={(e) => {
+                setConvertOutputPath(e.target.value);
+                setIsOutputDirty(true);
+              }}
               style={{ flex: 1, fontSize: "13px", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1" }}
             />
             <button type="button" className="btn btn-secondary" onClick={handleBrowseConvertOutput} style={{ width: "36px", height: "36px", padding: 0 }} title="自定义输出路径">

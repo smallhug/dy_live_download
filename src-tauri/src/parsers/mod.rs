@@ -22,31 +22,33 @@ pub struct LiveRoomInfo {
 pub trait LiveParser: Send + Sync {
     async fn parse(
         &self,
+        client: &reqwest::Client,
         room_id: &str,
         cookie: &str,
         user_agent: &str,
         sec_ch_ua: &str,
-        preferred_quality: &str, // 新增：首选画质
+        preferred_quality: &str,
     ) -> Result<LiveRoomInfo, String>;
 }
 
 // 平台分发函数
 pub async fn parse_live(
+    client: &reqwest::Client,
     platform: &str,
     room_id: &str,
     cookie: &str,
     user_agent: &str,
     sec_ch_ua: &str,
-    preferred_quality: &str, // 新增：首选画质
+    preferred_quality: &str,
 ) -> Result<LiveRoomInfo, String> {
     match platform {
         "douyin" => {
             let parser = douyin::DouyinParser;
-            parser.parse(room_id, cookie, user_agent, sec_ch_ua, preferred_quality).await
+            parser.parse(client, room_id, cookie, user_agent, sec_ch_ua, preferred_quality).await
         }
         "bilibili" => {
             let parser = bilibili::BilibiliParser;
-            parser.parse(room_id, cookie, user_agent, sec_ch_ua, preferred_quality).await
+            parser.parse(client, room_id, cookie, user_agent, sec_ch_ua, preferred_quality).await
         }
         other => Err(format!("不支持的直播平台: {}", other)),
     }
@@ -54,13 +56,14 @@ pub async fn parse_live(
 
 // 获取各平台 Cookie 对应的账号昵称
 pub async fn fetch_nickname(
+    client: &reqwest::Client,
     platform: &str,
     cookie: &str,
     user_agent: &str,
 ) -> Option<String> {
     match platform {
-        "douyin" => douyin::fetch_nickname_from_cookie(cookie, user_agent).await,
-        "bilibili" => bilibili::fetch_nickname_from_cookie(cookie, user_agent).await,
+        "douyin" => douyin::fetch_nickname_from_cookie(client, cookie, user_agent).await,
+        "bilibili" => bilibili::fetch_nickname_from_cookie(client, cookie, user_agent).await,
         _ => None,
     }
 }

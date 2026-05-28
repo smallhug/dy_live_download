@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { AppConfig, GlobalConfig, RoomConfig, RecordProgress, LiveRoomInfo, TelemetryPayload } from "./types";
@@ -28,11 +28,61 @@ const Clock: React.FC = () => {
   return <>{time}</>;
 };
 
+interface TelemetryBarProps {
+  onlineCount: number;
+  activeRecordCount: number;
+}
+
+const TelemetryBar: React.FC<TelemetryBarProps> = ({ onlineCount, activeRecordCount }) => {
+  const [telemetry, setTelemetry] = useState<TelemetryPayload>({ cpu_usage: 0, net_recv: 0, net_sent: 0 });
+
+  useEffect(() => {
+    const unlistenTelemetryPromise = listen<TelemetryPayload>("telemetry", (event) => {
+      setTelemetry(event.payload);
+    });
+
+    return () => {
+      unlistenTelemetryPromise.then((unlisten) => unlisten());
+    };
+  }, []);
+
+  return (
+    <footer className="app-telemetry-bar">
+      <div className="telemetry-left">
+        <span className="telemetry-item">
+          <span className="telemetry-label">在线主播:</span>
+          <span className="telemetry-value">{onlineCount} 个</span>
+        </span>
+        <span className="telemetry-divider">|</span>
+        <span className="telemetry-item">
+          <span className="telemetry-label">录制通道:</span>
+          <span className="telemetry-value active">{activeRecordCount} 路</span>
+        </span>
+      </div>
+
+      <div className="telemetry-right">
+        <span className="telemetry-item">
+          <span className="telemetry-label">↓</span>
+          <span className="telemetry-value speed">{formatSpeed(telemetry.net_recv)}</span>
+        </span>
+        <span className="telemetry-divider">|</span>
+        <span className="telemetry-item">
+          <span className="telemetry-label">↑</span>
+          <span className="telemetry-value speed">{formatSpeed(telemetry.net_sent)}</span>
+        </span>
+        <span className="telemetry-divider">|</span>
+        <span className="telemetry-item time-display">
+          <Clock />
+        </span>
+      </div>
+    </footer>
+  );
+};
+
 function App() {
   // ── 核心框架状态 ──────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<"dashboard" | "credentials" | "converter" | "settings">("dashboard");
   const [searchQuery, setSearchQuery] = useState("");
-  const [telemetry, setTelemetry] = useState<TelemetryPayload>({ cpu_usage: 0, net_recv: 0, net_sent: 0 });
 
   // ── 系统设置与大盘原有状态 ──────────────────────────────────────────
   const [config, setConfig] = useState<AppConfig | null>(null);
@@ -51,35 +101,35 @@ function App() {
   // ── 自定义对话框状态 ──────────────────────────────────────────
   const [dialogState, setDialogState] = useState<(DialogOptions & { resolve: (v: boolean) => void }) | null>(null);
 
-  const showDialog = (opts: DialogOptions): Promise<boolean> => {
+  const showDialog = useCallback((opts: DialogOptions): Promise<boolean> => {
     return new Promise((resolve) => {
       setDialogState({ ...opts, resolve });
     });
-  };
+  }, []);
 
-  const alertAsync = (message: string, title?: string, kind?: "info" | "error" | "warning") => {
+  const alertAsync = useCallback((message: string, title?: string, kind?: "info" | "error" | "warning") => {
     return showDialog({ type: "alert", message, title, kind });
-  };
+  }, [showDialog]);
 
-  const confirmAsync = (message: string, title?: string) => {
+  const confirmAsync = useCallback((message: string, title?: string) => {
     return showDialog({ type: "confirm", message, title });
-  };
+  }, [showDialog]);
   const [roomStatuses, setRoomStatuses] = useState<Record<string, { is_live: boolean; title?: string }>>({});
   const [checkingRooms, setCheckingRooms] = useState<Record<string, boolean>>({});
   const [recordLoading, setRecordLoading] = useState<Record<string, "starting" | "stopping" | null>>({});
 
   // ── 获取全局配置 ──────────────────────────────────────────────
-  const fetchConfig = async () => {
+  const fetchConfig = useCallback(async () => {
     try {
       const res = await invoke<AppConfig>("get_config");
       setConfig(res);
     } catch (err) {
       console.error("加载配置失败:", err);
     }
-  };
+  }, []);
 
   // ── 获取正在录制的任务 ────────────────────────────────────────────
-  const fetchActiveTasks = async () => {
+  const fetchActiveTasks = useCallback(async () => {
     try {
       const res = await invoke<string[]>("get_active_tasks");
       setActiveTasks(res);
@@ -98,17 +148,12 @@ function App() {
     } catch (err) {
       console.error("获取录制列表或标题失败:", err);
     }
-  };
+  }, []);
 
   // ── 初始化加载与事件监听 ────────────────────────────────────────────
   useEffect(() => {
     fetchConfig();
     fetchActiveTasks();
-
-    // 监听 Rust 遙测包广播
-    const unlistenTelemetry = listen<TelemetryPayload>("telemetry", (event) => {
-      setTelemetry(event.payload);
-    });
 
     // 监听 Rust 后端发送的进度通知
     const unlistenProgress = listen<RecordProgress>("record-progress", (event) => {
@@ -173,14 +218,13 @@ function App() {
     });
 
     return () => {
-      unlistenTelemetry.then((fn) => fn());
       unlistenProgress.then((fn) => fn());
       unlistenRoomStatus.then((fn) => fn());
     };
-  }, []);
+  }, [fetchConfig, fetchActiveTasks, alertAsync]);
 
   // ── 添加直播间 ──────────────────────────────────────────────
-  const handleAddRoom = async (
+  const handleAddRoom = useCallback(async (
     url: string,
     isMonitoring: boolean,
     preferredQuality: string,
@@ -195,10 +239,10 @@ function App() {
       platform,
     });
     await fetchConfig();
-  };
+  }, [fetchConfig]);
 
   // ── 删除直播间 ──────────────────────────────────────────────
-  const handleDeleteRoom = async (roomId: string) => {
+  const handleDeleteRoom = useCallback(async (roomId: string) => {
     if (await confirmAsync("确定要删除该主播吗？如果正在录制，录制将强制停止。", "删除主播")) {
       try {
         await invoke("delete_room", { roomId });
@@ -213,10 +257,10 @@ function App() {
         alertAsync("删除主播失败: " + err, "错误", "error");
       }
     }
-  };
+  }, [fetchConfig, fetchActiveTasks, confirmAsync, alertAsync]);
 
   // ── 更新直播间配置 ────────────────────────────────────────────
-  const handleUpdateRoomConfig = async (updatedRoom: RoomConfig) => {
+  const handleUpdateRoomConfig = useCallback(async (updatedRoom: RoomConfig) => {
     try {
       await invoke("update_room_config", { room: updatedRoom });
       await fetchConfig();
@@ -224,10 +268,10 @@ function App() {
       alertAsync("更新直播间配置失败: " + err, "错误", "error");
       throw err;
     }
-  };
+  }, [fetchConfig, alertAsync]);
 
   // ── 手动检测开播状态 ────────────────────────────────────────────
-  const handleCheckRoomStatus = async (room: RoomConfig) => {
+  const handleCheckRoomStatus = useCallback(async (room: RoomConfig) => {
     setCheckingRooms((prev) => ({ ...prev, [room.room_id]: true }));
     try {
       const info = await invoke<LiveRoomInfo>("parse_room", { url: room.room_id, platform: room.platform });
@@ -249,10 +293,10 @@ function App() {
     } finally {
       setCheckingRooms((prev) => ({ ...prev, [room.room_id]: false }));
     }
-  };
+  }, [fetchConfig]);
 
   // ── 手动开始录制 ──────────────────────────────────────────────
-  const handleStartRecord = async (roomId: string) => {
+  const handleStartRecord = useCallback(async (roomId: string) => {
     setRecordLoading((prev) => ({ ...prev, [roomId]: "starting" }));
     try {
       await invoke("start_record_task", { roomId });
@@ -263,10 +307,10 @@ function App() {
     } finally {
       setRecordLoading((prev) => ({ ...prev, [roomId]: null }));
     }
-  };
+  }, [fetchConfig, alertAsync]);
 
   // ── 手动停止录制 ──────────────────────────────────────────────
-  const handleStopRecord = async (roomId: string) => {
+  const handleStopRecord = useCallback(async (roomId: string) => {
     setRecordLoading((prev) => ({ ...prev, [roomId]: "stopping" }));
     try {
       await invoke("stop_record_task", { roomId });
@@ -276,18 +320,19 @@ function App() {
     } finally {
       setRecordLoading((prev) => ({ ...prev, [roomId]: null }));
     }
-  };
+  }, [fetchActiveTasks, alertAsync]);
 
-  const handleSaveGlobalConfig = async (patch: Partial<GlobalConfig>) => {
-    if (!config?.global) return;
+  const handleSaveGlobalConfig = useCallback(async (patch: Partial<GlobalConfig>) => {
+    const currentConfig = configRef.current;
+    if (!currentConfig?.global) return;
     try {
       const fullConfig = {
-        ffmpeg_path: config.global.ffmpeg_path,
-        save_dir: config.global.save_dir,
-        cookies: config.global.cookies,
-        user_agent: config.global.user_agent,
-        sec_ch_ua: config.global.sec_ch_ua,
-        monitor_interval_secs: config.global.monitor_interval_secs,
+        ffmpeg_path: currentConfig.global.ffmpeg_path,
+        save_dir: currentConfig.global.save_dir,
+        cookies: currentConfig.global.cookies,
+        user_agent: currentConfig.global.user_agent,
+        sec_ch_ua: currentConfig.global.sec_ch_ua,
+        monitor_interval_secs: currentConfig.global.monitor_interval_secs,
         ...patch
       };
       await invoke("update_global_config", {
@@ -302,7 +347,7 @@ function App() {
     } catch (err) {
       alertAsync("更新全局配置失败: " + err, "错误", "error");
     }
-  };
+  }, [fetchConfig, alertAsync]);
 
   // ── 过滤搜索主播卡片 ────────────────────────────────────────────
   const filteredRooms = useMemo(() => {
@@ -419,6 +464,8 @@ function App() {
             <CredentialsPage
               config={config}
               onSaveCookies={async (cookies) => { await handleSaveGlobalConfig({ cookies }); }}
+              confirmAsync={confirmAsync}
+              alertAsync={alertAsync}
             />
           )}
 
@@ -438,36 +485,10 @@ function App() {
         </main>
 
         {/* 4. 底部 Telemetry Status Bar */}
-        <footer className="app-telemetry-bar">
-          <div className="telemetry-left">
-            <span className="telemetry-item">
-              <span className="telemetry-label">在线主播:</span>
-              <span className="telemetry-value">{config?.rooms.filter(r => roomStatuses[r.room_id]?.is_live).length || 0} 个</span>
-            </span>
-            <span className="telemetry-divider">|</span>
-            <span className="telemetry-item">
-              <span className="telemetry-label">录制通道:</span>
-              <span className="telemetry-value active">{activeTasks.length} 路</span>
-            </span>
-            {/* 系统就绪状态文字已移除 */}
-          </div>
-
-          <div className="telemetry-right">
-            <span className="telemetry-item">
-              <span className="telemetry-label">↓</span>
-              <span className="telemetry-value speed">{formatSpeed(telemetry.net_recv)}</span>
-            </span>
-            <span className="telemetry-divider">|</span>
-            <span className="telemetry-item">
-              <span className="telemetry-label">↑</span>
-              <span className="telemetry-value speed">{formatSpeed(telemetry.net_sent)}</span>
-            </span>
-            <span className="telemetry-divider">|</span>
-            <span className="telemetry-item time-display">
-              <Clock />
-            </span>
-          </div>
-        </footer>
+        <TelemetryBar 
+          onlineCount={config?.rooms.filter(r => roomStatuses[r.room_id]?.is_live).length || 0}
+          activeRecordCount={activeTasks.length}
+        />
       </div>
 
       {/* 5. 原有的主播与卡片设置弹出 modal 层（依然维持高阶 Modal 的精致弹出） */}

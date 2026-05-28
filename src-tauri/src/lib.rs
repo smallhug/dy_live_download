@@ -5,7 +5,7 @@ mod monitor;
 mod telemetry;
 mod logger;
 
-use config::{load_config, save_config, AppConfig, RoomConfig, CookieItem};
+use config::{load_config, save_config, AppConfig, RoomConfig, CookieItem, AppConfigState};
 use parsers::LiveRoomInfo;
 use recorder::{get_active_recordings, start_recording, stop_recording, RecorderState};
 use serde::{Deserialize, Serialize};
@@ -19,16 +19,19 @@ fn truncate_str(s: &str, max_chars: usize) -> &str {
 }
 use tauri::{AppHandle, Emitter, Manager, State};
 
+pub struct HttpClientState(pub reqwest::Client);
+
 // 1. 获取配置
 #[tauri::command]
-fn get_config(app: AppHandle) -> AppConfig {
-    load_config(&app)
+fn get_config(state: State<'_, AppConfigState>) -> AppConfig {
+    state.0.read().unwrap().clone()
 }
 
 // 2. 保存全局配置
 #[tauri::command]
 fn update_global_config(
     app: AppHandle,
+    state: State<'_, AppConfigState>,
     ffmpeg_path: String,
     save_dir: String,
     cookies: Vec<CookieItem>,
@@ -36,7 +39,7 @@ fn update_global_config(
     sec_ch_ua: String,
     monitor_interval_secs: u64,
 ) -> Result<(), String> {
-    let mut config = load_config(&app);
+    let mut config = state.0.write().unwrap();
     config.global.ffmpeg_path = ffmpeg_path;
     config.global.save_dir = save_dir;
     config.global.cookies = cookies;
@@ -48,17 +51,28 @@ fn update_global_config(
 
 // 3. 解析直播间基本信息（用于手动状态检测，使用 Cookie 以防滑块拦截）
 #[tauri::command]
-async fn parse_room(app: AppHandle, url: String, platform: Option<String>) -> Result<LiveRoomInfo, String> {
+async fn parse_room(
+    app: AppHandle,
+    state: State<'_, AppConfigState>,
+    http_state: State<'_, HttpClientState>,
+    url: String,
+    platform: Option<String>,
+) -> Result<LiveRoomInfo, String> {
     let platform_str = platform.unwrap_or_else(|| "douyin".to_string());
-    let cookie = get_and_increment_cookie(&app, &platform_str);
-    let config = load_config(&app);
-    parsers::parse_live(&platform_str, &url, &cookie, &config.global.user_agent, &config.global.sec_ch_ua, "origin").await
+    let cookie = get_and_increment_cookie(&app, &state, &platform_str);
+    let (user_agent, sec_ch_ua) = {
+        let config = state.0.read().unwrap();
+        (config.global.user_agent.clone(), config.global.sec_ch_ua.clone())
+    };
+    parsers::parse_live(&http_state.0, &platform_str, &url, &cookie, &user_agent, &sec_ch_ua, "origin").await
 }
 
 // 4. 添加直播间
 #[tauri::command]
 async fn add_room(
     app: AppHandle,
+    state: State<'_, AppConfigState>,
+    http_state: State<'_, HttpClientState>,
     url: String,
     is_monitoring: bool,
     preferred_quality: String,
@@ -67,12 +81,17 @@ async fn add_room(
 ) -> Result<RoomConfig, String> {
     let platform_str = platform.unwrap_or_else(|| "douyin".to_string());
     // 负载均衡选择并自增一个 Cookie 
-    let cookie = get_and_increment_cookie(&app, &platform_str);
-    let mut config = load_config(&app);
+    let cookie = get_and_increment_cookie(&app, &state, &platform_str);
+    
+    let (user_agent, sec_ch_ua) = {
+        let config = state.0.read().unwrap();
+        (config.global.user_agent.clone(), config.global.sec_ch_ua.clone())
+    };
 
     // 解析直播间，以获取真实的 anchor_name 和 room_id
-    let info = parsers::parse_live(&platform_str, &url, &cookie, &config.global.user_agent, &config.global.sec_ch_ua, &preferred_quality).await?;
+    let info = parsers::parse_live(&http_state.0, &platform_str, &url, &cookie, &user_agent, &sec_ch_ua, &preferred_quality).await?;
 
+    let mut config = state.0.write().unwrap();
     // 检查是否重复
     if config.rooms.iter().any(|r| r.room_id == info.room_id) {
         return Err("该直播间已在任务列表中".to_string());
@@ -96,19 +115,28 @@ async fn add_room(
 
 // 5. 删除直播间
 #[tauri::command]
-async fn delete_room(app: AppHandle, state: State<'_, RecorderState>, room_id: String) -> Result<(), String> {
+async fn delete_room(
+    app: AppHandle,
+    state: State<'_, RecorderState>,
+    config_state: State<'_, AppConfigState>,
+    room_id: String,
+) -> Result<(), String> {
     // 如果该房间正在录制，先强行停止录制
     let _ = stop_recording(state, &room_id).await;
 
-    let mut config = load_config(&app);
+    let mut config = config_state.0.write().unwrap();
     config.rooms.retain(|r| r.room_id != room_id);
     save_config(&app, &config)
 }
 
 // 6. 更新单个直播间配置
 #[tauri::command]
-fn update_room_config(app: AppHandle, room: RoomConfig) -> Result<(), String> {
-    let mut config = load_config(&app);
+fn update_room_config(
+    app: AppHandle,
+    config_state: State<'_, AppConfigState>,
+    room: RoomConfig,
+) -> Result<(), String> {
+    let mut config = config_state.0.write().unwrap();
     if let Some(idx) = config.rooms.iter().position(|r| r.room_id == room.room_id) {
         config.rooms[idx] = room;
         save_config(&app, &config)?;
@@ -123,26 +151,38 @@ fn update_room_config(app: AppHandle, room: RoomConfig) -> Result<(), String> {
 async fn start_record_task(
     app: AppHandle,
     state: State<'_, RecorderState>,
+    config_state: State<'_, AppConfigState>,
+    http_state: State<'_, HttpClientState>,
     room_id: String,
 ) -> Result<(), String> {
     info!("开始手动录制任务");
     info!("room_id: {}", room_id);
 
-    let config = load_config(&app);
-    let room = config
-        .rooms
-        .iter()
-        .find(|r| r.room_id == room_id)
-        .ok_or_else(|| "找不到该直播间配置".to_string())?;
+    let (room, ffmpeg_path, save_dir, user_agent, sec_ch_ua) = {
+        let config = config_state.0.read().unwrap();
+        let room = config
+            .rooms
+            .iter()
+            .find(|r| r.room_id == room_id)
+            .cloned()
+            .ok_or_else(|| "找不到该直播间配置".to_string())?;
+        (
+            room,
+            config.global.ffmpeg_path.clone(),
+            config.global.save_dir.clone(),
+            config.global.user_agent.clone(),
+            config.global.sec_ch_ua.clone(),
+        )
+    };
 
     let platform_str = room.platform.clone();
     // 负载均衡选择并自增一个 Cookie 
-    let cookie = get_and_increment_cookie(&app, &platform_str);
+    let cookie = get_and_increment_cookie(&app, &config_state, &platform_str);
 
     info!("主播: {}, 房间ID: {}, 平台: {}", room.anchor_name, room.room_id, platform_str);
 
     // 开始解析流地址
-    let info = parsers::parse_live(&platform_str, &room.room_id, &cookie, &config.global.user_agent, &config.global.sec_ch_ua, &room.preferred_quality).await?;
+    let info = parsers::parse_live(&http_state.0, &platform_str, &room.room_id, &cookie, &user_agent, &sec_ch_ua, &room.preferred_quality).await?;
     
     info!("解析结果 - is_live: {}, streams数量: {}", info.is_live, info.streams.len());
     
@@ -187,10 +227,10 @@ async fn start_record_task(
         info.anchor_name,
         info.title, // 传入直播标题
         stream_url,
-        config.global.ffmpeg_path,
-        config.global.save_dir,
+        ffmpeg_path,
+        save_dir,
         room.segment_duration_mins,
-        config.global.user_agent,  // 传入用户配置的 UA
+        user_agent,  // 传入用户配置的 UA
         platform_str,
     )
     .await?;
@@ -625,8 +665,8 @@ async fn convert_video(
 }
 
 // 辅助函数：挑选当前指定平台下使用次数最少的 Cookie，并递增计数后保存
-pub(crate) fn get_and_increment_cookie(app: &AppHandle, platform: &str) -> String {
-    let mut config = load_config(app);
+pub(crate) fn get_and_increment_cookie(app: &AppHandle, state: &AppConfigState, platform: &str) -> String {
+    let mut config = state.0.write().unwrap();
     // 筛选出对应平台的 Cookie
     let mut matched_indices = Vec::new();
     for (idx, item) in config.global.cookies.iter().enumerate() {
@@ -661,16 +701,23 @@ pub(crate) fn get_and_increment_cookie(app: &AppHandle, platform: &str) -> Strin
 
 // 13. 提供根据 Cookie 自动解析其登录账号昵称的命令
 #[tauri::command]
-async fn get_cookie_nickname(app: AppHandle, cookie: String, platform: Option<String>) -> Result<Option<String>, String> {
+async fn get_cookie_nickname(
+    config_state: State<'_, AppConfigState>,
+    http_state: State<'_, HttpClientState>,
+    cookie: String,
+    platform: Option<String>,
+) -> Result<Option<String>, String> {
     let platform_str = platform.unwrap_or_else(|| "douyin".to_string());
-    let config = load_config(&app);
-    let ua = if config.global.user_agent.trim().is_empty() {
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    } else {
-        &config.global.user_agent
+    let ua = {
+        let config = config_state.0.read().unwrap();
+        if config.global.user_agent.trim().is_empty() {
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36".to_string()
+        } else {
+            config.global.user_agent.clone()
+        }
     };
 
-    Ok(parsers::fetch_nickname(&platform_str, &cookie, ua).await)
+    Ok(parsers::fetch_nickname(&http_state.0, &platform_str, &cookie, &ua).await)
 }
 
 #[tauri::command]
@@ -708,16 +755,23 @@ async fn check_login_status(app: AppHandle, platform: Option<String>) -> Result<
 }
 
 #[tauri::command]
-async fn validate_cookie(app: AppHandle, cookie: String, platform: Option<String>) -> Result<bool, String> {
+async fn validate_cookie(
+    config_state: State<'_, AppConfigState>,
+    http_state: State<'_, HttpClientState>,
+    cookie: String,
+    platform: Option<String>,
+) -> Result<bool, String> {
     let platform_str = platform.unwrap_or_else(|| "douyin".to_string());
-    let config = load_config(&app);
-    let ua = if config.global.user_agent.trim().is_empty() {
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    } else {
-        &config.global.user_agent
+    let ua = {
+        let config = config_state.0.read().unwrap();
+        if config.global.user_agent.trim().is_empty() {
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36".to_string()
+        } else {
+            config.global.user_agent.clone()
+        }
     };
 
-    match parsers::fetch_nickname(&platform_str, &cookie, ua).await {
+    match parsers::fetch_nickname(&http_state.0, &platform_str, &cookie, &ua).await {
         Some(_) => Ok(true),
         None => Ok(false),
     }
@@ -734,6 +788,17 @@ pub fn run() {
 
             logger::init_logger(&app_handle);
             info!("应用启动");
+
+            // 初始化并载入配置
+            let initial_config = load_config(&app_handle);
+            app.manage(AppConfigState(std::sync::RwLock::new(initial_config)));
+
+            // 初始化并托管全局 HTTP 客户端
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(15))
+                .build()
+                .expect("Failed to build global HTTP client");
+            app.manage(HttpClientState(client));
 
             monitor::start_monitor_loop(app_handle.clone());
             telemetry::start_telemetry_loop(app_handle);
