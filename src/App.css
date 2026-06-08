@@ -1017,14 +1017,3 @@ body {
   position: relative;
   z-index: 1;
 }
-
-/* 侧边栏底部 GitHub 图标样式 */
-.github-btn {
-  color: #64748b;
-  transition: color 0.2s ease, background-color 0.2s ease;
-}
-
-.github-btn:hover {
-  color: #0f172a;
-  background-color: #f1f5f9;
-}

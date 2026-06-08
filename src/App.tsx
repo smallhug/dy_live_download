@@ -18,7 +18,6 @@ import {
   TvIcon, 
   PlusIcon,
   KeyIcon,
-  GithubIcon,
 } from "./components/Icons";
 import "./App.css";
 
@@ -83,14 +82,6 @@ const TelemetryBar: React.FC<TelemetryBarProps> = ({ onlineCount, activeRecordCo
 };
 
 function App() {
-  const handleOpenGithub = useCallback(async () => {
-    try {
-      await openUrl("https://github.com/smallhug");
-    } catch (err) {
-      console.error("无法打开 Github 链接:", err);
-    }
-  }, []);
-
   // ── 核心框架状态 ──────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<"dashboard" | "credentials" | "converter" | "settings">("dashboard");
   const [searchQuery, setSearchQuery] = useState("");
@@ -422,15 +413,6 @@ function App() {
               <SettingsIcon size={22} />
             </button>
           </nav>
-
-          <button 
-            className="nav-item github-btn"
-            onClick={handleOpenGithub}
-            title="关于作者"
-            style={{ marginTop: "auto" }}
-          >
-            <GithubIcon size={22} />
-          </button>
         </aside>
       </div>
 
