@@ -43,6 +43,10 @@
 | FR-08 | 视频格式无损封装转换（MP4/MKV/FLV等） | P1 | ✅ 已实现 |
 | FR-09 | 实时录制进度显示（时间/速度/状态） | P1 | ✅ 已实现 |
 | FR-10 | 系统托盘运行与开机自启动 | P1 | ✅ 已实现 |
+| FR-11 | 外部专业播放器零负担硬件解码联动 (PotPlayer/mpv/VLC) | P1 | ✅ 已实现 |
+| FR-12 | 弹幕伴侣文件离线同步转储 (标准 XML / 结构化 JSONL) | P1 | ✅ 已实现 |
+| FR-13 | 直播间弹幕信息懒加载 (1000条环形缓冲+触顶分页回溯) | P1 | ✅ 已实现 |
+| FR-14 | 抖音/B站双重鲁棒礼物协议解析与富文本模板清洗 | P1 | ✅ 已实现 |
 
 #### 非功能性需求 (NFR)
 
@@ -54,6 +58,8 @@
 | NFR-04 | 配置数据持久化安全 | JSON原子写入 + 备份 |
 | NFR-05 | 日志文件大小可控 | 10MB 自动轮转 |
 | NFR-06 | 反风控能力 | 随机延迟 + Cookie轮换 |
+| NFR-07 | 后台录制常驻内存 < 60MB | IPC 广播按需订阅熔断，后台录制 0 IPC 损耗 |
+| NFR-08 | 长列表流畅度 60FPS | content-visibility: auto + 视口位置无感补偿 |
 
 ---
 
@@ -213,7 +219,10 @@
 │ monitor_interval_secs: u32│   │ segment_duration_mins: u32│
 │ close_to_tray: bool      │    │ is_monitoring: bool      │
 │ auto_start: bool         │    │ auto_record: bool        │
-│ silent_start: bool       │    └──────────────────────────┘
+│ silent_start: bool       │    │ record_danmaku: bool     │
+│ record_danmaku: bool     │    │ danmaku_format: String   │
+│ danmaku_format: String   │    └──────────────────────────┘
+│ external_player_path: opt│    
 └──────────────────────────┘    
                 │ 1
                 │
@@ -235,14 +244,20 @@
 | 模块 | 文件路径 | 核心职责 | 关键接口/函数 |
 |------|----------|----------|---------------|
 | **Config** | `config.rs` | 配置持久化与管理 | `load_config()` / `save_config()` / `AppConfigState` |
-| **Parser-Douyin** | `parsers/douyin.rs` | 抖音直播流解析 | `parse_douyin_room()` / 双策略回退提取 |
-| **Parser-BiliBili** | `parsers/bilibili.rs` | B站直播流解析 | `parse_bilibili_room()` / API链路调用 |
-| **Recorder** | `recorder.rs` | FFmpeg 录制进程管理 | `start_recording()` / `stop_recording()` |
-| **Monitor** | `monitor.rs` | 定时自动监控循环 | `start_monitor_loop()` / 反风控抖动 |
-| **Telemetry** | `telemetry.rs` | 系统性能采集 | `start_telemetry_loop()` / CPU+网络 |
-| **Logger** | `logger.rs` | 日志记录与轮转 | `init_logger()` / 10MB 自动清理 |
-| **LoginAuth** | `lib.rs` | 登录辅助窗口 | `open_login_window()` / `capture_cookies()` |
-| **Converter** | `lib.rs` | 视频格式转换 | `convert_video()` / 进度事件推送 |
+| **Parser-Douyin** | `parsers/douyin.rs` | 抖音直播流解析 (SSR Pace) | `parse_douyin_live()` / 双策略回退提取 |
+| **Parser-BiliBili** | `parsers/bilibili.rs` | B站直播流解析 | `parse_bilibili_live()` / API链路调用 |
+| **Recorder** | `recorder.rs` | FFmpeg 录制进程管理与优雅停机 | `start_recording()` / `stop_recording()` / 写入 'q' |
+| **Monitor** | `monitor.rs` | 定时自动监控循环与开播触发 | `start_monitor_loop()` / 随机打散延迟 |
+| **Telemetry** | `telemetry.rs` | 系统性能采集与网速遥测 | `start_telemetry_loop()` / CPU+网卡吞吐 |
+| **Logger** | `logger.rs` | 日志记录与自动轮转 | `init_logger()` / 10MB 自动轮转 |
+| **LoginAuth** | `auth.rs` | WebView2 扫码登录与 Cookie 嗅探 | `open_login_window()` / `capture_login_cookies()` |
+| **Converter** | `converter.rs` | 本地 FFmpeg 视频格式无损封装互转 | `convert_video()` / 进度事件推送 |
+| **Tray** | `tray.rs` | 系统托盘与防误触关闭拦截 | `setup_tray()` / `handle_silent_start()` |
+| **ExternalPlayer**| `commands/room.rs` | 原生外部专业播放器启动联动 | `open_in_external_player()` / PotPlayer、mpv、VLC |
+| **Danmaku-Manager**| `danmaku/manager.rs`| 弹幕生命周期管理与内存环形缓冲 | `get_recent_danmaku()` / 按需订阅广播熔断 |
+| **Danmaku-Douyin** | `danmaku/douyin/*` | 抖音实时弹幕与双重鲁棒解码 | Protobuf 解码 + 底层 Wire 扫描器 + 礼物清洗 |
+| **Danmaku-Bilibili**| `danmaku/bilibili/*`| B站弹幕 WSS 拆包与解压缩 | 16字节协议头拆解 + Brotli/Zlib 解压 |
+| **Danmaku-Writer** | `danmaku/writer/*` | 离线弹幕伴侣文件同步落盘 | XML (B站格式) / JSONL 双格式流式写入器 |
 
 ### 3.5 关键流程设计
 
