@@ -18,6 +18,8 @@ export interface GlobalConfig {
   silent_start: boolean;
   close_to_tray: boolean;
   has_seen_guide: boolean;
+  record_danmaku?: boolean;
+  danmaku_format?: 'xml' | 'jsonl';
 }
 
 export interface RoomConfig {
@@ -28,6 +30,8 @@ export interface RoomConfig {
   segment_duration_mins: number;
   auto_record: boolean;
   platform: string;
+  record_danmaku?: boolean;
+  danmaku_format?: 'xml' | 'jsonl';
 }
 
 
@@ -48,6 +52,7 @@ export interface LiveRoomInfo {
   title: string;
   is_live: boolean;
   streams: LiveStream[];
+  internal_room_id?: string;
 }
 
 export interface RecordProgress {
@@ -62,4 +67,37 @@ export interface TelemetryPayload {
   cpu_usage: number;
   net_recv: number;
   net_sent: number;
+}
+
+export type LiveMessageType = 'chat' | 'gift' | 'like' | 'enter' | 'superchat';
+
+export interface LiveMessageUser {
+  user_id: string;
+  nickname: string;
+  avatar_url?: string;
+  badge_name?: string;
+  badge_level?: number;
+}
+
+export interface LiveMessagePayload {
+  type: LiveMessageType;
+  content?: string;
+  color?: string;
+  gift_name?: string;
+  gift_id?: number;
+  count?: number;
+  price_cents?: number;
+  combo_count?: number;
+  price_rmb?: number;
+  duration_secs?: number;
+  total?: number;
+}
+
+export interface LiveMessage {
+  id: string;
+  platform: 'douyin' | 'bilibili';
+  room_id: string;
+  timestamp_ms: number;
+  user: LiveMessageUser;
+  payload: LiveMessagePayload;
 }
