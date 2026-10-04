@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React from "react";
 import { LiveMessage } from "../../types";
 import { TrashIcon } from "../Icons";
 import { formatCount, formatCurrency } from "../../utils";
@@ -10,6 +10,13 @@ interface LiveChatPanelProps {
   onClear: () => void;
   chatListEndRef: React.RefObject<HTMLDivElement | null>;
   totalLikes?: number;
+  stats: {
+    chatCount: number;
+    giftCount: number;
+    giftTotalRmb: number;
+    giftBreakdown: GiftSummaryItem[];
+    topGifters: GifterItem[];
+  };
 }
 
 interface GiftSummaryItem {
@@ -32,88 +39,8 @@ export const LiveChatPanel: React.FC<LiveChatPanelProps> = ({
   onClear,
   chatListEndRef,
   totalLikes = 0,
+  stats,
 }) => {
-  // 全面统计礼物数据与互动概览
-  const stats = useMemo(() => {
-    let chatCount = 0;
-    let giftCount = 0;
-    let giftTotalRmb = 0;
-
-    const giftMap = new Map<string, { count: number; totalRmb: number }>();
-    const gifterMap = new Map<string, GifterItem>();
-
-    for (const m of messages) {
-      if (m.payload.type === "chat") {
-        chatCount++;
-      } else if (m.payload.type === "superchat") {
-        chatCount++;
-        const rmb = m.payload.price_rmb || 0;
-        giftCount++;
-        giftTotalRmb += rmb;
-
-        // SC 计入礼物榜
-        const cur = giftMap.get("醒目留言") || { count: 0, totalRmb: 0 };
-        cur.count++;
-        cur.totalRmb += rmb;
-        giftMap.set("醒目留言", cur);
-
-        // 送礼用户榜
-        const uid = m.user.user_id || m.user.nickname;
-        const gifter = gifterMap.get(uid) || {
-          userId: uid,
-          nickname: m.user.nickname,
-          totalRmb: 0,
-          giftCount: 0,
-        };
-        gifter.totalRmb += rmb;
-        gifter.giftCount++;
-        gifterMap.set(uid, gifter);
-      } else if (m.payload.type === "gift") {
-        const count = m.payload.count || 1;
-        const rmb = ((m.payload.price_cents || 0) * count) / 100;
-        giftCount += count;
-        giftTotalRmb += rmb;
-
-        // 礼物名称汇总
-        const name = m.payload.gift_name || "未知礼物";
-        const cur = giftMap.get(name) || { count: 0, totalRmb: 0 };
-        cur.count += count;
-        cur.totalRmb += rmb;
-        giftMap.set(name, cur);
-
-        // 送礼用户榜
-        const uid = m.user.user_id || m.user.nickname;
-        const gifter = gifterMap.get(uid) || {
-          userId: uid,
-          nickname: m.user.nickname,
-          totalRmb: 0,
-          giftCount: 0,
-        };
-        gifter.totalRmb += rmb;
-        gifter.giftCount += count;
-        gifterMap.set(uid, gifter);
-      }
-    }
-
-    // 礼物种类排行榜
-    const giftBreakdown: GiftSummaryItem[] = Array.from(giftMap.entries())
-      .map(([name, data]) => ({ name, count: data.count, totalRmb: data.totalRmb }))
-      .sort((a, b) => b.totalRmb - a.totalRmb || b.count - a.count);
-
-    // 送礼观众榜单
-    const topGifters: GifterItem[] = Array.from(gifterMap.values())
-      .sort((a, b) => b.totalRmb - a.totalRmb || b.giftCount - a.giftCount)
-      .slice(0, 5);
-
-    return {
-      chatCount,
-      giftCount,
-      giftTotalRmb,
-      giftBreakdown,
-      topGifters,
-    };
-  }, [messages]);
-
   return (
     <div className="player-chat-panel">
       <div className="chat-panel-header">

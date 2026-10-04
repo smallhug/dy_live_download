@@ -38,6 +38,24 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
   const [hasNewMessagesBelow, setHasNewMessagesBelow] = useState(false);
   const [totalLikes, setTotalLikes] = useState<number>(0);
 
+  // 会话级累计统计数据（只增不减，不随视窗 500 条截断而丢失）
+  const [stats, setStats] = useState<{
+    chatCount: number;
+    giftCount: number;
+    giftTotalRmb: number;
+    giftBreakdown: GiftSummaryItem[];
+    topGifters: GifterItem[];
+  }>({
+    chatCount: 0,
+    giftCount: 0,
+    giftTotalRmb: 0,
+    giftBreakdown: [],
+    topGifters: [],
+  });
+
+  const giftMapRef = useRef<Map<string, { count: number; totalRmb: number }>>(new Map());
+  const gifterMapRef = useRef<Map<string, GifterItem>>(new Map());
+
   const listEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
@@ -67,6 +85,73 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
               }
             }
 
+            // 累加会话级全局统计（只增不减，解决滑动窗口截断导致数量减少的问题）
+            if (msg.payload.type === 'chat') {
+              setStats((prev) => ({ ...prev, chatCount: prev.chatCount + 1 }));
+            } else if (msg.payload.type === 'superchat') {
+              const rmb = msg.payload.price_rmb || 0;
+              const cur = giftMapRef.current.get("醒目留言") || { count: 0, totalRmb: 0 };
+              cur.count++;
+              cur.totalRmb += rmb;
+              giftMapRef.current.set("醒目留言", cur);
+
+              const uid = msg.user.user_id || msg.user.nickname;
+              const gifter = gifterMapRef.current.get(uid) || {
+                userId: uid,
+                nickname: msg.user.nickname,
+                totalRmb: 0,
+                giftCount: 0,
+              };
+              gifter.totalRmb += rmb;
+              gifter.giftCount++;
+              gifterMapRef.current.set(uid, gifter);
+
+              setStats((prev) => ({
+                ...prev,
+                chatCount: prev.chatCount + 1,
+                giftCount: prev.giftCount + 1,
+                giftTotalRmb: prev.giftTotalRmb + rmb,
+                giftBreakdown: Array.from(giftMapRef.current.entries())
+                  .map(([name, data]) => ({ name, count: data.count, totalRmb: data.totalRmb }))
+                  .sort((a, b) => b.totalRmb - a.totalRmb || b.count - a.count),
+                topGifters: Array.from(gifterMapRef.current.values())
+                  .sort((a, b) => b.totalRmb - a.totalRmb || b.giftCount - a.giftCount)
+                  .slice(0, 5),
+              }));
+            } else if (msg.payload.type === 'gift') {
+              const count = msg.payload.count || 1;
+              const rmb = ((msg.payload.price_cents || 0) * count) / 100;
+              const name = msg.payload.gift_name || "未知礼物";
+              const cur = giftMapRef.current.get(name) || { count: 0, totalRmb: 0 };
+              cur.count += count;
+              cur.totalRmb += rmb;
+              giftMapRef.current.set(name, cur);
+
+              const uid = msg.user.user_id || msg.user.nickname;
+              const gifter = gifterMapRef.current.get(uid) || {
+                userId: uid,
+                nickname: msg.user.nickname,
+                totalRmb: 0,
+                giftCount: 0,
+              };
+              gifter.totalRmb += rmb;
+              gifter.giftCount += count;
+              gifterMapRef.current.set(uid, gifter);
+
+              setStats((prev) => ({
+                ...prev,
+                giftCount: prev.giftCount + count,
+                giftTotalRmb: prev.giftTotalRmb + rmb,
+                giftBreakdown: Array.from(giftMapRef.current.entries())
+                  .map(([name, data]) => ({ name, count: data.count, totalRmb: data.totalRmb }))
+                  .sort((a, b) => b.totalRmb - a.totalRmb || b.count - a.count),
+                topGifters: Array.from(gifterMapRef.current.values())
+                  .sort((a, b) => b.totalRmb - a.totalRmb || b.giftCount - a.giftCount)
+                  .slice(0, 5),
+              }));
+            }
+
+            // 滚动视窗只保留最新 500 条消息以保证 UI 渲染流畅
             setMessages((prev) => {
               const next = [...prev, msg];
               if (next.length > 500) {
@@ -132,87 +217,6 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
     return messages.filter(m => m.payload.type === 'enter' || m.payload.type === 'like');
   }, [messages, filter]);
 
-  // 全面礼物统计与互动数据分析
-  const stats = useMemo(() => {
-    let chatCount = 0;
-    let giftCount = 0;
-    let giftTotalRmb = 0;
-
-    const giftMap = new Map<string, { count: number; totalRmb: number }>();
-    const gifterMap = new Map<string, GifterItem>();
-
-    for (const m of messages) {
-      if (m.payload.type === 'chat') {
-        chatCount++;
-      } else if (m.payload.type === 'superchat') {
-        chatCount++;
-        const rmb = m.payload.price_rmb || 0;
-        giftCount++;
-        giftTotalRmb += rmb;
-
-        // SC 计入礼物榜
-        const cur = giftMap.get("醒目留言") || { count: 0, totalRmb: 0 };
-        cur.count++;
-        cur.totalRmb += rmb;
-        giftMap.set("醒目留言", cur);
-
-        // 送礼用户榜
-        const uid = m.user.user_id || m.user.nickname;
-        const gifter = gifterMap.get(uid) || {
-          userId: uid,
-          nickname: m.user.nickname,
-          totalRmb: 0,
-          giftCount: 0,
-        };
-        gifter.totalRmb += rmb;
-        gifter.giftCount++;
-        gifterMap.set(uid, gifter);
-      } else if (m.payload.type === 'gift') {
-        const count = m.payload.count || 1;
-        const rmb = ((m.payload.price_cents || 0) * count) / 100;
-        giftCount += count;
-        giftTotalRmb += rmb;
-
-        // 礼物名称汇总
-        const name = m.payload.gift_name || "未知礼物";
-        const cur = giftMap.get(name) || { count: 0, totalRmb: 0 };
-        cur.count += count;
-        cur.totalRmb += rmb;
-        giftMap.set(name, cur);
-
-        // 送礼用户榜
-        const uid = m.user.user_id || m.user.nickname;
-        const gifter = gifterMap.get(uid) || {
-          userId: uid,
-          nickname: m.user.nickname,
-          totalRmb: 0,
-          giftCount: 0,
-        };
-        gifter.totalRmb += rmb;
-        gifter.giftCount += count;
-        gifterMap.set(uid, gifter);
-      }
-    }
-
-    // 礼物排行榜
-    const giftBreakdown: GiftSummaryItem[] = Array.from(giftMap.entries())
-      .map(([name, data]) => ({ name, count: data.count, totalRmb: data.totalRmb }))
-      .sort((a, b) => b.totalRmb - a.totalRmb || b.count - a.count);
-
-    // 送礼观众榜单
-    const topGifters: GifterItem[] = Array.from(gifterMap.values())
-      .sort((a, b) => b.totalRmb - a.totalRmb || b.giftCount - a.giftCount)
-      .slice(0, 5);
-
-    return {
-      chatCount,
-      giftCount,
-      giftTotalRmb,
-      giftBreakdown,
-      topGifters,
-    };
-  }, [messages]);
-
   if (!isOpen) return null;
 
   return (
@@ -235,7 +239,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
           <div className="danmaku-header-right">
             <button
               className="icon-btn"
-              title="清空聊天记录（保留点赞与礼物统计）"
+              title="清空聊天视窗（保留累计点赞与礼物统计）"
               onClick={() => setMessages([])}
             >
               <TrashIcon />
@@ -246,7 +250,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
           </div>
         </div>
 
-        {/* 实时互动统计栏 */}
+        {/* 实时互动统计栏（累计统计，永不减少） */}
         <div className="danmaku-stats-bar">
           <div className="stat-pill">
             <span className="stat-label">弹幕</span>

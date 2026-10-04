@@ -73,6 +73,18 @@ export const LivePlayerModal: React.FC<LivePlayerModalProps> = ({
   const [messages, setMessages] = useState<LiveMessage[]>([]);
   const [filter, setFilter] = useState<"all" | "chat" | "gift" | "other">("all");
   const [totalLikes, setTotalLikes] = useState<number>(0);
+
+  // 会话级累计统计数据（只增不减，不随 300 条视窗截断而丢失）
+  const [stats, setStats] = useState({
+    chatCount: 0,
+    giftCount: 0,
+    giftTotalRmb: 0,
+    giftBreakdown: [] as { name: string; count: number; totalRmb: number }[],
+    topGifters: [] as { userId: string; nickname: string; totalRmb: number; giftCount: number }[],
+  });
+
+  const giftMapRef = useRef<Map<string, { count: number; totalRmb: number }>>(new Map());
+  const gifterMapRef = useRef<Map<string, { userId: string; nickname: string; totalRmb: number; giftCount: number }>>(new Map());
   const emittedIdsRef = useRef<Set<string>>(new Set());
 
   // 1. 初始化 Canvas 弹幕引擎
@@ -124,6 +136,72 @@ export const LivePlayerModal: React.FC<LivePlayerModalProps> = ({
               } else {
                 setTotalLikes((prev) => prev + (msg.payload.count || 1));
               }
+            }
+
+            // 累加会话级全局统计（只增不减，不受视窗截断影响）
+            if (msg.payload.type === "chat") {
+              setStats((prev) => ({ ...prev, chatCount: prev.chatCount + 1 }));
+            } else if (msg.payload.type === "superchat") {
+              const rmb = msg.payload.price_rmb || 0;
+              const cur = giftMapRef.current.get("醒目留言") || { count: 0, totalRmb: 0 };
+              cur.count++;
+              cur.totalRmb += rmb;
+              giftMapRef.current.set("醒目留言", cur);
+
+              const uid = msg.user.user_id || msg.user.nickname;
+              const gifter = gifterMapRef.current.get(uid) || {
+                userId: uid,
+                nickname: msg.user.nickname,
+                totalRmb: 0,
+                giftCount: 0,
+              };
+              gifter.totalRmb += rmb;
+              gifter.giftCount++;
+              gifterMapRef.current.set(uid, gifter);
+
+              setStats((prev) => ({
+                ...prev,
+                chatCount: prev.chatCount + 1,
+                giftCount: prev.giftCount + 1,
+                giftTotalRmb: prev.giftTotalRmb + rmb,
+                giftBreakdown: Array.from(giftMapRef.current.entries())
+                  .map(([name, data]) => ({ name, count: data.count, totalRmb: data.totalRmb }))
+                  .sort((a, b) => b.totalRmb - a.totalRmb || b.count - a.count),
+                topGifters: Array.from(gifterMapRef.current.values())
+                  .sort((a, b) => b.totalRmb - a.totalRmb || b.giftCount - a.giftCount)
+                  .slice(0, 5),
+              }));
+            } else if (msg.payload.type === "gift") {
+              const count = msg.payload.count || 1;
+              const rmb = ((msg.payload.price_cents || 0) * count) / 100;
+              const name = msg.payload.gift_name || "未知礼物";
+              const cur = giftMapRef.current.get(name) || { count: 0, totalRmb: 0 };
+              cur.count += count;
+              cur.totalRmb += rmb;
+              giftMapRef.current.set(name, cur);
+
+              const uid = msg.user.user_id || msg.user.nickname;
+              const gifter = gifterMapRef.current.get(uid) || {
+                userId: uid,
+                nickname: msg.user.nickname,
+                totalRmb: 0,
+                giftCount: 0,
+              };
+              gifter.totalRmb += rmb;
+              gifter.giftCount += count;
+              gifterMapRef.current.set(uid, gifter);
+
+              setStats((prev) => ({
+                ...prev,
+                giftCount: prev.giftCount + count,
+                giftTotalRmb: prev.giftTotalRmb + rmb,
+                giftBreakdown: Array.from(giftMapRef.current.entries())
+                  .map(([name, data]) => ({ name, count: data.count, totalRmb: data.totalRmb }))
+                  .sort((a, b) => b.totalRmb - a.totalRmb || b.count - a.count),
+                topGifters: Array.from(gifterMapRef.current.values())
+                  .sort((a, b) => b.totalRmb - a.totalRmb || b.giftCount - a.giftCount)
+                  .slice(0, 5),
+              }));
             }
 
             // 右侧聊天列表（严格按消息唯一 ID 去重）
@@ -346,6 +424,7 @@ export const LivePlayerModal: React.FC<LivePlayerModalProps> = ({
           onClear={() => setMessages([])}
           chatListEndRef={chatListEndRef}
           totalLikes={totalLikes}
+          stats={stats}
         />
       </div>
     </div>
