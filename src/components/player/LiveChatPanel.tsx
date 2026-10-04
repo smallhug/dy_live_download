@@ -288,8 +288,8 @@ export const LiveChatPanel: React.FC<LiveChatPanelProps> = ({
             <span>发条弹幕和主播打个招呼吧</span>
           </div>
         ) : (
-          filteredMessages.map((msg) => (
-            <MessageItem key={msg.id} msg={msg} />
+          filteredMessages.map((msg, index) => (
+            <MessageItem key={`${msg.id}_${index}`} msg={msg} />
           ))
         )}
       </div>

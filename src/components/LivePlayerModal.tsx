@@ -230,9 +230,18 @@ export const LivePlayerModal: React.FC<LivePlayerModalProps> = ({
       // 批量更新总点赞
       setTotalLikes(maxLikesRef.current);
 
-      // 批量将消息推入视窗（维持最多 200 条节点以保证 DOM 极速渲染）
+      // 批量将消息推入视窗（严格按 id 去重，最多保留 200 条节点以保证 DOM 极速渲染）
       setMessages((prev) => {
-        const next = prev.concat(buffer);
+        const existingIds = new Set(prev.map((m) => m.id));
+        const uniqueItems: LiveMessage[] = [];
+        for (const msg of buffer) {
+          if (!existingIds.has(msg.id)) {
+            existingIds.add(msg.id);
+            uniqueItems.push(msg);
+          }
+        }
+        if (uniqueItems.length === 0) return prev;
+        const next = prev.concat(uniqueItems);
         return next.length > 200 ? next.slice(next.length - 200) : next;
       });
     }, 120);

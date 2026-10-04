@@ -102,7 +102,8 @@ pub async fn run_douyin_danmaku_loop(
 
     let mut cursor = String::new();
     let mut internal_ext = String::new();
-    let mut seen_ids: std::collections::VecDeque<String> = std::collections::VecDeque::with_capacity(400);
+    let mut seen_queue: std::collections::VecDeque<String> = std::collections::VecDeque::with_capacity(2048);
+    let mut seen_set: std::collections::HashSet<String> = std::collections::HashSet::with_capacity(2048);
 
     loop {
         if cancel_token.is_cancelled() {
@@ -147,11 +148,14 @@ pub async fn run_douyin_danmaku_loop(
 
                             let messages = parse_douyin_messages(&room_id, &response);
                             for msg in messages {
-                                if !seen_ids.contains(&msg.id) {
-                                    if seen_ids.len() >= 300 {
-                                        seen_ids.pop_front();
+                                if !seen_set.contains(&msg.id) {
+                                    if seen_queue.len() >= 2000 {
+                                        if let Some(old_id) = seen_queue.pop_front() {
+                                            seen_set.remove(&old_id);
+                                        }
                                     }
-                                    seen_ids.push_back(msg.id.clone());
+                                    seen_queue.push_back(msg.id.clone());
+                                    seen_set.insert(msg.id.clone());
                                     let _ = tx.send(msg).await;
                                 }
                             }
