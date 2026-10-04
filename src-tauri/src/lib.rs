@@ -90,7 +90,8 @@ pub fn run() {
             commands::danmaku::stop_danmaku_preview,
             commands::danmaku::is_danmaku_active,
             commands::danmaku::subscribe_danmaku,
-            commands::danmaku::unsubscribe_danmaku
+            commands::danmaku::unsubscribe_danmaku,
+            commands::danmaku::get_recent_danmaku
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

@@ -102,3 +102,8 @@ export interface LiveMessage {
   user: LiveMessageUser;
   payload: LiveMessagePayload;
 }
+
+export interface DanmakuPaginationResponse {
+  messages: LiveMessage[];
+  has_more: boolean;
+}

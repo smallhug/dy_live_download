@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useMemo, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { RoomConfig, LiveMessage } from "../types";
+import { RoomConfig, LiveMessage, DanmakuPaginationResponse } from "../types";
 import { CloseIcon, TrashIcon } from "./Icons";
 import { formatCount, formatCurrency } from "../utils";
 
@@ -25,7 +25,7 @@ interface GifterItem {
   giftCount: number;
 }
 
-// 记忆化单条消息组件：避免列表高频更新时 200 个旧节点重复重排重绘
+// 记忆化单条消息组件：避免列表高频更新时历史节点重复重排重绘
 const MessageItem = React.memo<{ msg: LiveMessage }>(({ msg }) => {
   const timeStr = useMemo(() => {
     return new Date(msg.timestamp_ms).toLocaleTimeString("zh-CN", {
@@ -120,6 +120,10 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
   const [hasNewMessagesBelow, setHasNewMessagesBelow] = useState(false);
   const [totalLikes, setTotalLikes] = useState<number>(0);
 
+  // 分页懒加载状态
+  const [hasMore, setHasMore] = useState(false);
+  const [isLoadingOlder, setIsLoadingOlder] = useState(false);
+
   // 会话级累计统计数据（只增不减）
   const [stats, setStats] = useState<{
     chatCount: number;
@@ -143,7 +147,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
   const isNearBottomRef = useRef<boolean>(true);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // 1. 批量排空定时器（120ms 节流合并写入，将每秒几十次 React 调度降至固定的 ~8 次）
+  // 1. 批量排空定时器（120ms 节流合并写入，阻断 React 高频重排风暴）
   useEffect(() => {
     if (!isOpen) return;
 
@@ -222,7 +226,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
       // 批量更新总点赞
       setTotalLikes(maxLikesRef.current);
 
-      // 批量将消息推入视窗（严格按 id 去重，最多保留 200 条节点以保证 DOM 极速渲染）
+      // 批量将消息推入视窗（严格按 id 去重）
       setMessages((prev) => {
         const existingIds = new Set(prev.map((m) => m.id));
         const uniqueItems: LiveMessage[] = [];
@@ -234,10 +238,13 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
         }
         if (uniqueItems.length === 0) return prev;
         const next = prev.concat(uniqueItems);
-        return next.length > 200 ? next.slice(next.length - 200) : next;
+
+        // 如果用户处于视口底部，维持轻量视窗上限；若用户向上阅读历史，放宽至 1200 条，保护阅读体验不被切断
+        const limit = isNearBottomRef.current ? 250 : 1200;
+        return next.length > limit ? next.slice(next.length - limit) : next;
       });
 
-      // 硬件加速极速吸底（彻底废除引起浏览器死锁重排的 scrollIntoView smooth）
+      // 硬件加速极速吸底
       if (isNearBottomRef.current && scrollContainerRef.current) {
         scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
         setHasNewMessagesBelow(false);
@@ -249,7 +256,68 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
     return () => clearInterval(flushTimer);
   }, [isOpen]);
 
-  // 2. 监听全局弹幕事件并写入缓冲区（纯 JS 内存操作，耗时 < 0.01ms）
+  // 2. 向上触顶懒加载更早的历史弹幕
+  const fetchOlderMessages = useCallback(async () => {
+    if (isLoadingOlder || !hasMore || messages.length === 0) return;
+    setIsLoadingOlder(true);
+
+    const oldestTs = messages[0].timestamp_ms;
+    const el = scrollContainerRef.current;
+    const prevScrollHeight = el ? el.scrollHeight : 0;
+    const prevScrollTop = el ? el.scrollTop : 0;
+
+    try {
+      const res = await invoke<DanmakuPaginationResponse>("get_recent_danmaku", {
+        roomId: room.room_id,
+        limit: 50,
+        beforeTimestampMs: oldestTs,
+      });
+
+      if (res.messages.length > 0) {
+        setMessages((prev) => {
+          const existingIds = new Set(prev.map((m) => m.id));
+          const uniqueOlder = res.messages.filter((m) => !existingIds.has(m.id));
+          return uniqueOlder.concat(prev);
+        });
+        setHasMore(res.has_more);
+
+        // 视觉滚动条无感位置补偿：确保用户当前正在阅读的文字位置保持静止
+        requestAnimationFrame(() => {
+          if (el) {
+            const heightDiff = el.scrollHeight - prevScrollHeight;
+            el.scrollTop = prevScrollTop + heightDiff;
+          }
+        });
+      } else {
+        setHasMore(false);
+      }
+    } catch (err) {
+      console.error("加载更早历史弹幕失败:", err);
+    } finally {
+      setIsLoadingOlder(false);
+    }
+  }, [isLoadingOlder, hasMore, messages, room.room_id]);
+
+  // 3. 用户滚动监听：判断是否处于视窗底部或触顶触发懒加载
+  const handleScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+
+    // 1. 判断是否贴紧底部
+    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const near = distanceToBottom < 45;
+    isNearBottomRef.current = near;
+    if (near) {
+      setHasNewMessagesBelow(false);
+    }
+
+    // 2. 判断是否向上触顶（scrollTop < 60），自动懒加载更早的历史弹幕
+    if (el.scrollTop < 60 && !isLoadingOlder && hasMore) {
+      fetchOlderMessages();
+    }
+  }, [fetchOlderMessages, isLoadingOlder, hasMore]);
+
+  // 4. 监听全局弹幕事件，并首次拉取历史首屏
   useEffect(() => {
     if (!isOpen) return;
 
@@ -259,6 +327,72 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
     const setupDanmaku = async () => {
       setStatus("connecting");
       try {
+        // 先从后端拉取最近的 50 条历史弹幕 (首屏秒开，彻底消除打开时空白)
+        try {
+          const historyRes = await invoke<DanmakuPaginationResponse>("get_recent_danmaku", {
+            roomId: room.room_id,
+            limit: 50,
+          });
+          if (isMounted && historyRes.messages.length > 0) {
+            setMessages(historyRes.messages);
+            setHasMore(historyRes.has_more);
+
+            // 初始化历史统计
+            let chatInit = 0;
+            let giftInit = 0;
+            let giftRmbInit = 0;
+            for (const msg of historyRes.messages) {
+              if (msg.payload.type === "chat") chatInit++;
+              else if (msg.payload.type === "superchat") {
+                chatInit++;
+                const rmb = msg.payload.price_rmb || 0;
+                giftInit++;
+                giftRmbInit += rmb;
+                const cur = giftMapRef.current.get("醒目留言") || { count: 0, totalRmb: 0 };
+                cur.count++;
+                cur.totalRmb += rmb;
+                giftMapRef.current.set("醒目留言", cur);
+              } else if (msg.payload.type === "gift") {
+                const count = msg.payload.count || 1;
+                const rmb = ((msg.payload.price_cents || 0) * count) / 100;
+                giftInit += count;
+                giftRmbInit += rmb;
+                const name = msg.payload.gift_name || "未知礼物";
+                const cur = giftMapRef.current.get(name) || { count: 0, totalRmb: 0 };
+                cur.count += count;
+                cur.totalRmb += rmb;
+                giftMapRef.current.set(name, cur);
+              } else if (msg.payload.type === "like") {
+                if (msg.payload.total && msg.payload.total > 0) {
+                  maxLikesRef.current = Math.max(maxLikesRef.current, msg.payload.total);
+                } else {
+                  maxLikesRef.current += msg.payload.count || 1;
+                }
+              }
+            }
+            setStats({
+              chatCount: chatInit,
+              giftCount: giftInit,
+              giftTotalRmb: giftRmbInit,
+              giftBreakdown: Array.from(giftMapRef.current.entries())
+                .map(([name, data]) => ({ name, count: data.count, totalRmb: data.totalRmb }))
+                .sort((a, b) => b.totalRmb - a.totalRmb || b.count - a.count),
+              topGifters: [],
+            });
+            setTotalLikes(maxLikesRef.current);
+
+            // 首屏拉取后直接吸底
+            requestAnimationFrame(() => {
+              if (scrollContainerRef.current) {
+                scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+              }
+            });
+          }
+        } catch (e) {
+          console.warn("拉取初始历史弹幕失败:", e);
+        }
+
+        // 监听实时弹幕事件
         const unlisten = await listen<LiveMessage>("live-danmaku", (event) => {
           if (!isMounted) return;
           const msg = event.payload;
@@ -308,18 +442,6 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
       }
     };
   }, [isOpen, room.room_id, room.platform, isRecording]);
-
-  // 3. 用户滚动监听：判断是否处于视窗底部
-  const handleScroll = useCallback(() => {
-    const el = scrollContainerRef.current;
-    if (!el) return;
-    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    const near = distanceToBottom < 45;
-    isNearBottomRef.current = near;
-    if (near) {
-      setHasNewMessagesBelow(false);
-    }
-  }, []);
 
   const scrollToBottom = () => {
     isNearBottomRef.current = true;
@@ -475,6 +597,18 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
           ref={scrollContainerRef}
           onScroll={handleScroll}
         >
+          {/* 向上触顶懒加载指示条 */}
+          {hasMore && (
+            <div className="danmaku-history-status">
+              {isLoadingOlder ? "正在加载更早历史弹幕..." : "向上滑动自动加载更早历史"}
+            </div>
+          )}
+          {!hasMore && messages.length >= 50 && (
+            <div className="danmaku-history-status end">
+              已加载全部历史弹幕
+            </div>
+          )}
+
           {filteredMessages.length === 0 ? (
             <div className="danmaku-empty-placeholder">
               <p>暂无消息，正在实时监听直播间...</p>

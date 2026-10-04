@@ -90,3 +90,17 @@ pub async fn unsubscribe_danmaku(
     danmaku_manager.unsubscribe(&room_id).await;
     Ok(())
 }
+
+// 获取指定房间最近的弹幕历史（支持首屏秒开与向上触顶分页懒加载）
+#[tauri::command]
+pub async fn get_recent_danmaku(
+    danmaku_manager: State<'_, DanmakuManager>,
+    room_id: String,
+    limit: Option<usize>,
+    before_timestamp_ms: Option<u64>,
+) -> Result<crate::danmaku::manager::DanmakuPaginationResponse, String> {
+    let limit = limit.unwrap_or(50).clamp(10, 200);
+    danmaku_manager
+        .get_recent_danmaku(&room_id, limit, before_timestamp_ms)
+        .await
+}
