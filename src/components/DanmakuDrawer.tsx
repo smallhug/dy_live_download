@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useMemo } from "react";
+import React, { useEffect, useState, useRef, useMemo, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { RoomConfig, LiveMessage } from "../types";
@@ -25,6 +25,89 @@ interface GifterItem {
   giftCount: number;
 }
 
+// 记忆化单条消息组件：避免列表高频更新时 200 个旧节点重复重排重绘
+const MessageItem = React.memo<{ msg: LiveMessage }>(({ msg }) => {
+  const timeStr = useMemo(() => {
+    return new Date(msg.timestamp_ms).toLocaleTimeString("zh-CN", {
+      hour12: false,
+    });
+  }, [msg.timestamp_ms]);
+
+  if (msg.payload.type === "superchat") {
+    return (
+      <div className="danmaku-msg-item superchat-card">
+        <div className="sc-header">
+          <span className="user-nickname">{msg.user.nickname}</span>
+          <span className="sc-price">¥{msg.payload.price_rmb?.toFixed(1)}</span>
+        </div>
+        <div className="sc-body">{msg.payload.content}</div>
+        <div className="sc-time">{timeStr}</div>
+      </div>
+    );
+  }
+
+  if (msg.payload.type === "gift") {
+    const totalRmb = ((msg.payload.price_cents || 0) * (msg.payload.count || 1)) / 100;
+    return (
+      <div className="danmaku-msg-item gift-item">
+        <span className="msg-time">{timeStr}</span>
+        <span className="user-nickname">{msg.user.nickname}</span>
+        <span className="gift-text">
+          送出 <span className="gift-name">{msg.payload.gift_name}</span> x
+          <span className="gift-count">{msg.payload.count}</span>
+          {totalRmb > 0 && (
+            <span className="gift-value-tag"> (¥{totalRmb.toFixed(1)})</span>
+          )}
+        </span>
+      </div>
+    );
+  }
+
+  if (msg.payload.type === "enter") {
+    return (
+      <div className="danmaku-msg-item enter-item">
+        <span className="msg-time">{timeStr}</span>
+        <span className="user-nickname">{msg.user.nickname}</span>
+        <span className="enter-text">进入了直播间</span>
+      </div>
+    );
+  }
+
+  if (msg.payload.type === "like") {
+    return (
+      <div className="danmaku-msg-item like-item">
+        <span className="msg-time">{timeStr}</span>
+        <span className="user-nickname">{msg.user.nickname || "观众"}</span>
+        <span className="like-text">
+          为主播点赞了
+          {msg.payload.count && msg.payload.count > 1 ? ` x${msg.payload.count}` : ""}
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="danmaku-msg-item chat-item">
+      <span className="msg-time">{timeStr}</span>
+      {msg.user.badge_name && (
+        <span className="user-badge" title={`等级 ${msg.user.badge_level || 1}`}>
+          {msg.user.badge_name}
+          {msg.user.badge_level ? ` ${msg.user.badge_level}` : ""}
+        </span>
+      )}
+      <span className="user-nickname">{msg.user.nickname}:</span>
+      <span
+        className="chat-content"
+        style={{ color: msg.payload.color || undefined }}
+      >
+        {msg.payload.content}
+      </span>
+    </div>
+  );
+});
+
+MessageItem.displayName = "MessageItem";
+
 export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
   room,
   isOpen,
@@ -32,13 +115,12 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
   onClose,
 }) => {
   const [messages, setMessages] = useState<LiveMessage[]>([]);
-  const [filter, setFilter] = useState<'all' | 'chat' | 'gift' | 'other'>('all');
-  const [status, setStatus] = useState<'connecting' | 'connected' | 'stopped'>('connecting');
-  const [isHovered, setIsHovered] = useState(false);
+  const [filter, setFilter] = useState<"all" | "chat" | "gift" | "other">("all");
+  const [status, setStatus] = useState<"connecting" | "connected" | "stopped">("connecting");
   const [hasNewMessagesBelow, setHasNewMessagesBelow] = useState(false);
   const [totalLikes, setTotalLikes] = useState<number>(0);
 
-  // 会话级累计统计数据（只增不减，不随视窗 500 条截断而丢失）
+  // 会话级累计统计数据（只增不减）
   const [stats, setStats] = useState<{
     chatCount: number;
     giftCount: number;
@@ -53,13 +135,112 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
     topGifters: [],
   });
 
+  // 内部高频缓冲区与引用
+  const incomingBufferRef = useRef<LiveMessage[]>([]);
   const giftMapRef = useRef<Map<string, { count: number; totalRmb: number }>>(new Map());
   const gifterMapRef = useRef<Map<string, GifterItem>>(new Map());
-
-  const listEndRef = useRef<HTMLDivElement>(null);
+  const maxLikesRef = useRef<number>(0);
+  const isNearBottomRef = useRef<boolean>(true);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // 监听并启动弹幕预览
+  // 1. 批量排空定时器（120ms 节流合并写入，将每秒几十次 React 调度降至固定的 ~8 次）
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const flushTimer = setInterval(() => {
+      const buffer = incomingBufferRef.current;
+      if (buffer.length === 0) return;
+
+      incomingBufferRef.current = [];
+
+      let chatInc = 0;
+      let giftInc = 0;
+      let giftRmbInc = 0;
+
+      for (const msg of buffer) {
+        if (msg.payload.type === "chat") {
+          chatInc++;
+        } else if (msg.payload.type === "superchat") {
+          chatInc++;
+          const rmb = msg.payload.price_rmb || 0;
+          giftInc++;
+          giftRmbInc += rmb;
+
+          const cur = giftMapRef.current.get("醒目留言") || { count: 0, totalRmb: 0 };
+          cur.count++;
+          cur.totalRmb += rmb;
+          giftMapRef.current.set("醒目留言", cur);
+
+          const uid = msg.user.user_id || msg.user.nickname;
+          const gifter = gifterMapRef.current.get(uid) || {
+            userId: uid,
+            nickname: msg.user.nickname,
+            totalRmb: 0,
+            giftCount: 0,
+          };
+          gifter.totalRmb += rmb;
+          gifter.giftCount++;
+          gifterMapRef.current.set(uid, gifter);
+        } else if (msg.payload.type === "gift") {
+          const count = msg.payload.count || 1;
+          const rmb = ((msg.payload.price_cents || 0) * count) / 100;
+          giftInc += count;
+          giftRmbInc += rmb;
+
+          const name = msg.payload.gift_name || "未知礼物";
+          const cur = giftMapRef.current.get(name) || { count: 0, totalRmb: 0 };
+          cur.count += count;
+          cur.totalRmb += rmb;
+          giftMapRef.current.set(name, cur);
+
+          const uid = msg.user.user_id || msg.user.nickname;
+          const gifter = gifterMapRef.current.get(uid) || {
+            userId: uid,
+            nickname: msg.user.nickname,
+            totalRmb: 0,
+            giftCount: 0,
+          };
+          gifter.totalRmb += rmb;
+          gifter.giftCount += count;
+          gifterMapRef.current.set(uid, gifter);
+        }
+      }
+
+      // 批量更新全局累计指标
+      setStats((prev) => ({
+        chatCount: prev.chatCount + chatInc,
+        giftCount: prev.giftCount + giftInc,
+        giftTotalRmb: prev.giftTotalRmb + giftRmbInc,
+        giftBreakdown: Array.from(giftMapRef.current.entries())
+          .map(([name, data]) => ({ name, count: data.count, totalRmb: data.totalRmb }))
+          .sort((a, b) => b.totalRmb - a.totalRmb || b.count - a.count),
+        topGifters: Array.from(gifterMapRef.current.values())
+          .sort((a, b) => b.totalRmb - a.totalRmb || b.giftCount - a.giftCount)
+          .slice(0, 5),
+      }));
+
+      // 批量更新总点赞
+      setTotalLikes(maxLikesRef.current);
+
+      // 批量将消息推入视窗（维持最多 200 条节点以保证 DOM 极速渲染）
+      setMessages((prev) => {
+        const next = prev.concat(buffer);
+        return next.length > 200 ? next.slice(next.length - 200) : next;
+      });
+
+      // 硬件加速极速吸底（彻底废除引起浏览器死锁重排的 scrollIntoView smooth）
+      if (isNearBottomRef.current && scrollContainerRef.current) {
+        scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+        setHasNewMessagesBelow(false);
+      } else {
+        setHasNewMessagesBelow(true);
+      }
+    }, 120);
+
+    return () => clearInterval(flushTimer);
+  }, [isOpen]);
+
+  // 2. 监听全局弹幕事件并写入缓冲区（纯 JS 内存操作，耗时 < 0.01ms）
   useEffect(() => {
     if (!isOpen) return;
 
@@ -67,103 +248,29 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
     let isMounted = true;
 
     const setupDanmaku = async () => {
-      setStatus('connecting');
+      setStatus("connecting");
       try {
-        // 1. 监听全局弹幕事件
         const unlisten = await listen<LiveMessage>("live-danmaku", (event) => {
           if (!isMounted) return;
           const msg = event.payload;
           if (msg.room_id === room.room_id) {
-            setStatus('connected');
+            setStatus("connected");
 
-            // 维护当前直播间累计总点赞数
-            if (msg.payload.type === 'like') {
+            // 累计点赞数
+            if (msg.payload.type === "like") {
               if (msg.payload.total && msg.payload.total > 0) {
-                setTotalLikes((prev) => Math.max(prev, msg.payload.total!));
+                maxLikesRef.current = Math.max(maxLikesRef.current, msg.payload.total);
               } else {
-                setTotalLikes((prev) => prev + (msg.payload.count || 1));
+                maxLikesRef.current += msg.payload.count || 1;
               }
             }
 
-            // 累加会话级全局统计（只增不减，解决滑动窗口截断导致数量减少的问题）
-            if (msg.payload.type === 'chat') {
-              setStats((prev) => ({ ...prev, chatCount: prev.chatCount + 1 }));
-            } else if (msg.payload.type === 'superchat') {
-              const rmb = msg.payload.price_rmb || 0;
-              const cur = giftMapRef.current.get("醒目留言") || { count: 0, totalRmb: 0 };
-              cur.count++;
-              cur.totalRmb += rmb;
-              giftMapRef.current.set("醒目留言", cur);
-
-              const uid = msg.user.user_id || msg.user.nickname;
-              const gifter = gifterMapRef.current.get(uid) || {
-                userId: uid,
-                nickname: msg.user.nickname,
-                totalRmb: 0,
-                giftCount: 0,
-              };
-              gifter.totalRmb += rmb;
-              gifter.giftCount++;
-              gifterMapRef.current.set(uid, gifter);
-
-              setStats((prev) => ({
-                ...prev,
-                chatCount: prev.chatCount + 1,
-                giftCount: prev.giftCount + 1,
-                giftTotalRmb: prev.giftTotalRmb + rmb,
-                giftBreakdown: Array.from(giftMapRef.current.entries())
-                  .map(([name, data]) => ({ name, count: data.count, totalRmb: data.totalRmb }))
-                  .sort((a, b) => b.totalRmb - a.totalRmb || b.count - a.count),
-                topGifters: Array.from(gifterMapRef.current.values())
-                  .sort((a, b) => b.totalRmb - a.totalRmb || b.giftCount - a.giftCount)
-                  .slice(0, 5),
-              }));
-            } else if (msg.payload.type === 'gift') {
-              const count = msg.payload.count || 1;
-              const rmb = ((msg.payload.price_cents || 0) * count) / 100;
-              const name = msg.payload.gift_name || "未知礼物";
-              const cur = giftMapRef.current.get(name) || { count: 0, totalRmb: 0 };
-              cur.count += count;
-              cur.totalRmb += rmb;
-              giftMapRef.current.set(name, cur);
-
-              const uid = msg.user.user_id || msg.user.nickname;
-              const gifter = gifterMapRef.current.get(uid) || {
-                userId: uid,
-                nickname: msg.user.nickname,
-                totalRmb: 0,
-                giftCount: 0,
-              };
-              gifter.totalRmb += rmb;
-              gifter.giftCount += count;
-              gifterMapRef.current.set(uid, gifter);
-
-              setStats((prev) => ({
-                ...prev,
-                giftCount: prev.giftCount + count,
-                giftTotalRmb: prev.giftTotalRmb + rmb,
-                giftBreakdown: Array.from(giftMapRef.current.entries())
-                  .map(([name, data]) => ({ name, count: data.count, totalRmb: data.totalRmb }))
-                  .sort((a, b) => b.totalRmb - a.totalRmb || b.count - a.count),
-                topGifters: Array.from(gifterMapRef.current.values())
-                  .sort((a, b) => b.totalRmb - a.totalRmb || b.giftCount - a.giftCount)
-                  .slice(0, 5),
-              }));
-            }
-
-            // 滚动视窗只保留最新 500 条消息以保证 UI 渲染流畅
-            setMessages((prev) => {
-              const next = [...prev, msg];
-              if (next.length > 500) {
-                return next.slice(next.length - 500);
-              }
-              return next;
-            });
+            // 推入待渲染缓冲池
+            incomingBufferRef.current.push(msg);
           }
         });
         unlistenFn = unlisten;
 
-        // 2. 检查是否正在运行，如果没在运行则启动独立预览
         const active = await invoke<boolean>("is_danmaku_active", { roomId: room.room_id });
         if (!active) {
           await invoke("start_danmaku_preview", {
@@ -171,10 +278,10 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
             platform: room.platform,
           });
         }
-        setStatus('connected');
+        setStatus("connected");
       } catch (err) {
         console.error("Failed to start danmaku preview:", err);
-        if (isMounted) setStatus('stopped');
+        if (isMounted) setStatus("stopped");
       }
     };
 
@@ -183,38 +290,41 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
     return () => {
       isMounted = false;
       if (unlistenFn) unlistenFn();
-
-      // 如果当前没有在进行视频录制，则在抽屉关闭时停止弹幕连接以节省网络
       if (!isRecording) {
         invoke("stop_danmaku_preview", { roomId: room.room_id }).catch(() => {});
       }
     };
   }, [isOpen, room.room_id, room.platform, isRecording]);
 
-  // 自动平滑滚动到底部
-  useEffect(() => {
-    if (!isHovered && listEndRef.current) {
-      listEndRef.current.scrollIntoView({ behavior: "smooth" });
+  // 3. 用户滚动监听：判断是否处于视窗底部
+  const handleScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const near = distanceToBottom < 45;
+    isNearBottomRef.current = near;
+    if (near) {
       setHasNewMessagesBelow(false);
-    } else if (isHovered) {
-      setHasNewMessagesBelow(true);
     }
-  }, [messages, isHovered]);
+  }, []);
 
   const scrollToBottom = () => {
-    listEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    isNearBottomRef.current = true;
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+    }
     setHasNewMessagesBelow(false);
   };
 
   const filteredMessages = useMemo(() => {
-    if (filter === 'all') return messages;
-    if (filter === 'chat') {
-      return messages.filter(m => m.payload.type === 'chat' || m.payload.type === 'superchat');
+    if (filter === "all") return messages;
+    if (filter === "chat") {
+      return messages.filter((m) => m.payload.type === "chat" || m.payload.type === "superchat");
     }
-    if (filter === 'gift') {
-      return messages.filter(m => m.payload.type === 'gift' || m.payload.type === 'superchat');
+    if (filter === "gift") {
+      return messages.filter((m) => m.payload.type === "gift" || m.payload.type === "superchat");
     }
-    return messages.filter(m => m.payload.type === 'enter' || m.payload.type === 'like');
+    return messages.filter((m) => m.payload.type === "enter" || m.payload.type === "like");
   }, [messages, filter]);
 
   if (!isOpen) return null;
@@ -233,14 +343,17 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
               <span className="danmaku-room-id">ID: {room.room_id}</span>
             </div>
             <span className={`danmaku-status-dot ${status}`}>
-              {status === 'connected' ? '实时接收中' : status === 'connecting' ? '连接中...' : '已断开'}
+              {status === "connected" ? "实时接收中" : status === "connecting" ? "连接中..." : "已断开"}
             </span>
           </div>
           <div className="danmaku-header-right">
             <button
               className="icon-btn"
               title="清空聊天视窗（保留累计点赞与礼物统计）"
-              onClick={() => setMessages([])}
+              onClick={() => {
+                setMessages([]);
+                incomingBufferRef.current = [];
+              }}
             >
               <TrashIcon />
             </button>
@@ -274,33 +387,33 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
         {/* 过滤切换标签 */}
         <div className="danmaku-tabs">
           <button
-            className={`tab-btn ${filter === 'all' ? 'active' : ''}`}
-            onClick={() => setFilter('all')}
+            className={`tab-btn ${filter === "all" ? "active" : ""}`}
+            onClick={() => setFilter("all")}
           >
             全部 ({messages.length})
           </button>
           <button
-            className={`tab-btn ${filter === 'chat' ? 'active' : ''}`}
-            onClick={() => setFilter('chat')}
+            className={`tab-btn ${filter === "chat" ? "active" : ""}`}
+            onClick={() => setFilter("chat")}
           >
             弹幕 ({stats.chatCount})
           </button>
           <button
-            className={`tab-btn ${filter === 'gift' ? 'active' : ''}`}
-            onClick={() => setFilter('gift')}
+            className={`tab-btn ${filter === "gift" ? "active" : ""}`}
+            onClick={() => setFilter("gift")}
           >
             礼物 ({stats.giftCount})
           </button>
           <button
-            className={`tab-btn ${filter === 'other' ? 'active' : ''}`}
-            onClick={() => setFilter('other')}
+            className={`tab-btn ${filter === "other" ? "active" : ""}`}
+            onClick={() => setFilter("other")}
           >
             进场/互动
           </button>
         </div>
 
         {/* 礼物专区统计概览卡片 (仅在切换到礼物 Tab 时展示) */}
-        {filter === 'gift' && (
+        {filter === "gift" && (
           <div className="gift-summary-banner">
             <div className="gift-summary-row">
               <div className="summary-item">
@@ -347,8 +460,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
         <div
           className="danmaku-message-list"
           ref={scrollContainerRef}
-          onMouseEnter={() => setIsHovered(true)}
-          onMouseLeave={() => setIsHovered(false)}
+          onScroll={handleScroll}
         >
           {filteredMessages.length === 0 ? (
             <div className="danmaku-empty-placeholder">
@@ -356,89 +468,13 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
               <span className="empty-sub">主播开播时，观众发送的弹幕和礼物将在这里实时呈现</span>
             </div>
           ) : (
-            filteredMessages.map((msg) => {
-              const timeStr = new Date(msg.timestamp_ms).toLocaleTimeString("zh-CN", {
-                hour12: false,
-              });
-
-              if (msg.payload.type === 'superchat') {
-                return (
-                  <div key={msg.id} className="danmaku-msg-item superchat-card">
-                    <div className="sc-header">
-                      <span className="user-nickname">{msg.user.nickname}</span>
-                      <span className="sc-price">¥{msg.payload.price_rmb?.toFixed(1)}</span>
-                    </div>
-                    <div className="sc-body">{msg.payload.content}</div>
-                    <div className="sc-time">{timeStr}</div>
-                  </div>
-                );
-              }
-
-              if (msg.payload.type === 'gift') {
-                const totalRmb = ((msg.payload.price_cents || 0) * (msg.payload.count || 1)) / 100;
-                return (
-                  <div key={msg.id} className="danmaku-msg-item gift-item">
-                    <span className="msg-time">{timeStr}</span>
-                    <span className="user-nickname">{msg.user.nickname}</span>
-                    <span className="gift-text">
-                      送出 <span className="gift-name">{msg.payload.gift_name}</span> x
-                      <span className="gift-count">{msg.payload.count}</span>
-                      {totalRmb > 0 && (
-                        <span className="gift-value-tag"> (¥{totalRmb.toFixed(1)})</span>
-                      )}
-                    </span>
-                  </div>
-                );
-              }
-
-              if (msg.payload.type === 'enter') {
-                return (
-                  <div key={msg.id} className="danmaku-msg-item enter-item">
-                    <span className="msg-time">{timeStr}</span>
-                    <span className="user-nickname">{msg.user.nickname}</span>
-                    <span className="enter-text">进入了直播间</span>
-                  </div>
-                );
-              }
-
-              if (msg.payload.type === 'like') {
-                return (
-                  <div key={msg.id} className="danmaku-msg-item like-item">
-                    <span className="msg-time">{timeStr}</span>
-                    <span className="user-nickname">{msg.user.nickname || "观众"}</span>
-                    <span className="like-text">
-                      为主播点赞了
-                      {msg.payload.count && msg.payload.count > 1 ? ` x${msg.payload.count}` : ''}
-                    </span>
-                  </div>
-                );
-              }
-
-              // Normal chat message
-              return (
-                <div key={msg.id} className="danmaku-msg-item chat-item">
-                  <span className="msg-time">{timeStr}</span>
-                  {msg.user.badge_name && (
-                    <span className="user-badge" title={`等级 ${msg.user.badge_level || 1}`}>
-                      {msg.user.badge_name}
-                      {msg.user.badge_level ? ` ${msg.user.badge_level}` : ''}
-                    </span>
-                  )}
-                  <span className="user-nickname">{msg.user.nickname}:</span>
-                  <span
-                    className="chat-content"
-                    style={{ color: msg.payload.color || undefined }}
-                  >
-                    {msg.payload.content}
-                  </span>
-                </div>
-              );
-            })
+            filteredMessages.map((msg) => (
+              <MessageItem key={msg.id} msg={msg} />
+            ))
           )}
-          <div ref={listEndRef} />
         </div>
 
-        {/* 鼠标悬停暂停滚动时的提示按钮 */}
+        {/* 用户往上翻阅时的回到底部快捷按钮 */}
         {hasNewMessagesBelow && (
           <button className="danmaku-scroll-bottom-btn" onClick={scrollToBottom}>
             ↓ 底部有新消息（点击回到底部）

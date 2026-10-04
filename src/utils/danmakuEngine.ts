@@ -73,6 +73,12 @@ export class DanmakuEngine {
   public emit(text: string, color: string = "#FFFFFF", isSelf: boolean = false): void {
     if (!this.visible || !text.trim()) return;
 
+    // 屏幕并发弹幕上限保护（最多 36 条），避免高频狂轰滥炸导致 Canvas 掉帧卡顿
+    if (this.items.length >= 36) {
+      if (!isSelf) return;
+      this.items.shift();
+    }
+
     const rect = this.canvas.getBoundingClientRect();
     const canvasWidth = rect.width;
     const canvasHeight = rect.height;

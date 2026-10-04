@@ -1,23 +1,7 @@
-import React from "react";
+import React, { useMemo, useRef, useState, useEffect, useCallback } from "react";
 import { LiveMessage } from "../../types";
 import { TrashIcon } from "../Icons";
 import { formatCount, formatCurrency } from "../../utils";
-
-interface LiveChatPanelProps {
-  messages: LiveMessage[];
-  filter: "all" | "chat" | "gift" | "other";
-  setFilter: (filter: "all" | "chat" | "gift" | "other") => void;
-  onClear: () => void;
-  chatListEndRef: React.RefObject<HTMLDivElement | null>;
-  totalLikes?: number;
-  stats: {
-    chatCount: number;
-    giftCount: number;
-    giftTotalRmb: number;
-    giftBreakdown: GiftSummaryItem[];
-    topGifters: GifterItem[];
-  };
-}
 
 interface GiftSummaryItem {
   name: string;
@@ -32,15 +16,161 @@ interface GifterItem {
   giftCount: number;
 }
 
+interface LiveChatPanelProps {
+  messages: LiveMessage[];
+  filter: "all" | "chat" | "gift" | "other";
+  setFilter: (filter: "all" | "chat" | "gift" | "other") => void;
+  onClear: () => void;
+  chatListEndRef?: React.RefObject<HTMLDivElement | null>;
+  totalLikes?: number;
+  stats: {
+    chatCount: number;
+    giftCount: number;
+    giftTotalRmb: number;
+    giftBreakdown: GiftSummaryItem[];
+    topGifters: GifterItem[];
+  };
+}
+
+// 记忆化单条消息组件：避免高频新消息追加时历史节点重复执行重排重绘
+const MessageItem = React.memo<{ msg: LiveMessage }>(({ msg }) => {
+  const timeStr = useMemo(() => {
+    return new Date(msg.timestamp_ms).toLocaleTimeString("zh-CN", {
+      hour12: false,
+    });
+  }, [msg.timestamp_ms]);
+
+  if (msg.payload.type === "superchat") {
+    return (
+      <div className="danmaku-msg-item superchat-card">
+        <div className="sc-header">
+          <span className="user-nickname">{msg.user.nickname}</span>
+          <span className="sc-price">¥{msg.payload.price_rmb?.toFixed(1)}</span>
+        </div>
+        <div className="sc-body">{msg.payload.content}</div>
+        <div className="sc-time">{timeStr}</div>
+      </div>
+    );
+  }
+
+  if (msg.payload.type === "gift") {
+    const totalRmb = ((msg.payload.price_cents || 0) * (msg.payload.count || 1)) / 100;
+    return (
+      <div className="danmaku-msg-item gift-item">
+        <span className="msg-time">{timeStr}</span>
+        <span className="user-nickname">{msg.user.nickname}</span>
+        <span className="gift-text">
+          送出 <span className="gift-name">{msg.payload.gift_name}</span> x
+          <span className="gift-count">{msg.payload.count}</span>
+          {totalRmb > 0 && (
+            <span className="gift-value-tag"> (¥{totalRmb.toFixed(1)})</span>
+          )}
+        </span>
+      </div>
+    );
+  }
+
+  if (msg.payload.type === "enter") {
+    return (
+      <div className="danmaku-msg-item enter-item">
+        <span className="msg-time">{timeStr}</span>
+        <span className="user-nickname">{msg.user.nickname}</span>
+        <span className="enter-text">进入了直播间</span>
+      </div>
+    );
+  }
+
+  if (msg.payload.type === "like") {
+    return (
+      <div className="danmaku-msg-item like-item">
+        <span className="msg-time">{timeStr}</span>
+        <span className="user-nickname">{msg.user.nickname || "观众"}</span>
+        <span className="like-text">
+          为主播点赞了
+          {msg.payload.count && msg.payload.count > 1 ? ` x${msg.payload.count}` : ""}
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="danmaku-msg-item chat-item">
+      <span className="msg-time">{timeStr}</span>
+      {msg.user.badge_name && (
+        <span className="user-badge" title={`等级 ${msg.user.badge_level || 1}`}>
+          {msg.user.badge_name}
+          {msg.user.badge_level ? ` ${msg.user.badge_level}` : ""}
+        </span>
+      )}
+      <span className="user-nickname">{msg.user.nickname}:</span>
+      <span
+        className="chat-content"
+        style={{ color: msg.payload.color || undefined }}
+      >
+        {msg.payload.content}
+      </span>
+    </div>
+  );
+});
+
+MessageItem.displayName = "MessageItem";
+
 export const LiveChatPanel: React.FC<LiveChatPanelProps> = ({
   messages,
   filter,
   setFilter,
   onClear,
-  chatListEndRef,
   totalLikes = 0,
   stats,
 }) => {
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const isNearBottomRef = useRef<boolean>(true);
+  const [hasNewMessagesBelow, setHasNewMessagesBelow] = useState(false);
+
+  // 硬件加速极速吸底（彻底替代 scrollIntoView smooth 动画插值引发的重排风暴）
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+
+    if (isNearBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+      setHasNewMessagesBelow(false);
+    } else {
+      setHasNewMessagesBelow(true);
+    }
+  }, [messages]);
+
+  // 滚动监听判断是否贴紧底部
+  const handleScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const near = distanceToBottom < 45;
+    isNearBottomRef.current = near;
+    if (near) {
+      setHasNewMessagesBelow(false);
+    }
+  }, []);
+
+  const scrollToBottom = () => {
+    isNearBottomRef.current = true;
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+    }
+    setHasNewMessagesBelow(false);
+  };
+
+  const filteredMessages = useMemo(() => {
+    if (filter === "all") return messages;
+    if (filter === "chat") {
+      return messages.filter((m) => m.payload.type === "chat" || m.payload.type === "superchat");
+    }
+    if (filter === "gift") {
+      return messages.filter((m) => m.payload.type === "gift" || m.payload.type === "superchat");
+    }
+    return messages.filter((m) => m.payload.type === "enter" || m.payload.type === "like");
+  }, [messages, filter]);
+
   return (
     <div className="player-chat-panel">
       <div className="chat-panel-header">
@@ -145,100 +275,35 @@ export const LiveChatPanel: React.FC<LiveChatPanelProps> = ({
         </div>
       )}
 
-      {/* 消息滚动列表 */}
-      <div className="chat-message-stream">
-        {messages.length === 0 ? (
+      {/* 消息滚动列表（硬件加速瞬时滚动，零平滑死锁） */}
+      <div
+        className="chat-message-stream"
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
+        style={{ position: "relative" }}
+      >
+        {filteredMessages.length === 0 ? (
           <div className="chat-empty-hint">
             <p>正在接收弹幕中...</p>
             <span>发条弹幕和主播打个招呼吧</span>
           </div>
         ) : (
-          messages
-            .filter((m) => {
-              if (filter === "all") return true;
-              if (filter === "chat")
-                return m.payload.type === "chat" || m.payload.type === "superchat";
-              if (filter === "gift")
-                return m.payload.type === "gift" || m.payload.type === "superchat";
-              return m.payload.type === "enter" || m.payload.type === "like";
-            })
-            .map((m) => {
-              const time = new Date(m.timestamp_ms).toLocaleTimeString("zh-CN", {
-                hour12: false,
-              });
-
-              if (m.payload.type === "superchat") {
-                return (
-                  <div key={m.id} className="danmaku-msg-item superchat-card">
-                    <div className="sc-header">
-                      <span className="user-nickname">{m.user.nickname}</span>
-                      <span className="sc-price">¥{m.payload.price_rmb?.toFixed(1)}</span>
-                    </div>
-                    <div className="sc-body">{m.payload.content}</div>
-                    <div className="sc-time">{time}</div>
-                  </div>
-                );
-              }
-
-              if (m.payload.type === "gift") {
-                const totalRmb = ((m.payload.price_cents || 0) * (m.payload.count || 1)) / 100;
-                return (
-                  <div key={m.id} className="danmaku-msg-item gift-item">
-                    <span className="msg-time">{time}</span>
-                    <span className="user-nickname">{m.user.nickname}</span>
-                    <span className="gift-text">
-                      送出 <span className="gift-name">{m.payload.gift_name}</span> x
-                      <span className="gift-count">{m.payload.count}</span>
-                      {totalRmb > 0 && (
-                        <span className="gift-value-tag"> (¥{totalRmb.toFixed(1)})</span>
-                      )}
-                    </span>
-                  </div>
-                );
-              }
-
-              if (m.payload.type === "enter") {
-                return (
-                  <div key={m.id} className="danmaku-msg-item enter-item">
-                    <span className="msg-time">{time}</span>
-                    <span className="user-nickname">{m.user.nickname}</span>
-                    <span className="enter-text">进入了直播间</span>
-                  </div>
-                );
-              }
-
-              if (m.payload.type === "like") {
-                return (
-                  <div key={m.id} className="danmaku-msg-item like-item">
-                    <span className="msg-time">{time}</span>
-                    <span className="user-nickname">{m.user.nickname || "观众"}</span>
-                    <span className="like-text">
-                      为主播点赞了
-                      {m.payload.count && m.payload.count > 1 ? ` x${m.payload.count}` : ""}
-                    </span>
-                  </div>
-                );
-              }
-
-              return (
-                <div key={m.id} className="danmaku-msg-item chat-item">
-                  <span className="msg-time">{time}</span>
-                  {m.user.badge_name && (
-                    <span className="user-badge">{m.user.badge_name}</span>
-                  )}
-                  <span className="user-nickname">{m.user.nickname}:</span>
-                  <span
-                    className="chat-content"
-                    style={{ color: m.payload.color || undefined }}
-                  >
-                    {m.payload.content}
-                  </span>
-                </div>
-              );
-            })
+          filteredMessages.map((msg) => (
+            <MessageItem key={msg.id} msg={msg} />
+          ))
         )}
-        <div ref={chatListEndRef} />
       </div>
+
+      {/* 向上翻阅历史消息时的快速回到底部提示按钮 */}
+      {hasNewMessagesBelow && (
+        <button
+          className="danmaku-scroll-bottom-btn"
+          style={{ position: "relative", margin: "4px 8px 8px" }}
+          onClick={scrollToBottom}
+        >
+          ↓ 底部有新消息（点击回到底部）
+        </button>
+      )}
     </div>
   );
 };

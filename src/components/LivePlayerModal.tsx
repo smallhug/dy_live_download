@@ -74,7 +74,7 @@ export const LivePlayerModal: React.FC<LivePlayerModalProps> = ({
   const [filter, setFilter] = useState<"all" | "chat" | "gift" | "other">("all");
   const [totalLikes, setTotalLikes] = useState<number>(0);
 
-  // 会话级累计统计数据（只增不减，不随 300 条视窗截断而丢失）
+  // 会话级累计统计数据（只增不减，不随 200 条视窗截断而丢失）
   const [stats, setStats] = useState({
     chatCount: 0,
     giftCount: 0,
@@ -83,6 +83,9 @@ export const LivePlayerModal: React.FC<LivePlayerModalProps> = ({
     topGifters: [] as { userId: string; nickname: string; totalRmb: number; giftCount: number }[],
   });
 
+  // 内部高频缓冲区与引用
+  const incomingBufferRef = useRef<LiveMessage[]>([]);
+  const maxLikesRef = useRef<number>(0);
   const giftMapRef = useRef<Map<string, { count: number; totalRmb: number }>>(new Map());
   const gifterMapRef = useRef<Map<string, { userId: string; nickname: string; totalRmb: number; giftCount: number }>>(new Map());
   const emittedIdsRef = useRef<Set<string>>(new Set());
@@ -116,7 +119,128 @@ export const LivePlayerModal: React.FC<LivePlayerModalProps> = ({
     });
   }, [danmakuVisible, danmakuOpacity, danmakuFontSize, danmakuSpeed]);
 
-  // 2. 监听全局弹幕事件
+  // 2. 批量排空定时器（120ms 节流合并写入，阻断 React 高频重渲染与 UI 线程卡顿）
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const flushTimer = setInterval(() => {
+      const buffer = incomingBufferRef.current;
+      if (buffer.length === 0) return;
+
+      incomingBufferRef.current = [];
+
+      let chatInc = 0;
+      let giftInc = 0;
+      let giftRmbInc = 0;
+      let canvasEmittedCount = 0;
+
+      for (const msg of buffer) {
+        if (msg.payload.type === "chat") {
+          chatInc++;
+        } else if (msg.payload.type === "superchat") {
+          chatInc++;
+          const rmb = msg.payload.price_rmb || 0;
+          giftInc++;
+          giftRmbInc += rmb;
+
+          const cur = giftMapRef.current.get("醒目留言") || { count: 0, totalRmb: 0 };
+          cur.count++;
+          cur.totalRmb += rmb;
+          giftMapRef.current.set("醒目留言", cur);
+
+          const uid = msg.user.user_id || msg.user.nickname;
+          const gifter = gifterMapRef.current.get(uid) || {
+            userId: uid,
+            nickname: msg.user.nickname,
+            totalRmb: 0,
+            giftCount: 0,
+          };
+          gifter.totalRmb += rmb;
+          gifter.giftCount++;
+          gifterMapRef.current.set(uid, gifter);
+        } else if (msg.payload.type === "gift") {
+          const count = msg.payload.count || 1;
+          const rmb = ((msg.payload.price_cents || 0) * count) / 100;
+          giftInc += count;
+          giftRmbInc += rmb;
+
+          const name = msg.payload.gift_name || "未知礼物";
+          const cur = giftMapRef.current.get(name) || { count: 0, totalRmb: 0 };
+          cur.count += count;
+          cur.totalRmb += rmb;
+          giftMapRef.current.set(name, cur);
+
+          const uid = msg.user.user_id || msg.user.nickname;
+          const gifter = gifterMapRef.current.get(uid) || {
+            userId: uid,
+            nickname: msg.user.nickname,
+            totalRmb: 0,
+            giftCount: 0,
+          };
+          gifter.totalRmb += rmb;
+          gifter.giftCount += count;
+          gifterMapRef.current.set(uid, gifter);
+        }
+
+        // Canvas 弹幕发射频次保护：每批次最多发射 5 条，避免暴风式刷屏压垮 Canvas 绘制线程
+        if (canvasEmittedCount < 5 && !emittedIdsRef.current.has(msg.id)) {
+          emittedIdsRef.current.add(msg.id);
+          if (emittedIdsRef.current.size > 400) {
+            emittedIdsRef.current.clear();
+          }
+
+          if (msg.payload.type === "chat" && msg.payload.content) {
+            danmakuEngineRef.current?.emit(
+              msg.payload.content,
+              msg.payload.color || "#FFFFFF",
+              false
+            );
+            canvasEmittedCount++;
+          } else if (msg.payload.type === "superchat" && msg.payload.content) {
+            danmakuEngineRef.current?.emit(
+              `[醒目留言 ¥${msg.payload.price_rmb?.toFixed(0)}] ${msg.payload.content}`,
+              "#F59E0B",
+              false
+            );
+            canvasEmittedCount++;
+          } else if (msg.payload.type === "gift") {
+            danmakuEngineRef.current?.emit(
+              `[礼物] ${msg.user.nickname} 送出 ${msg.payload.gift_name} x${msg.payload.count}`,
+              "#FB923C",
+              false
+            );
+            canvasEmittedCount++;
+          }
+        }
+      }
+
+      // 批量更新累计指标
+      setStats((prev) => ({
+        chatCount: prev.chatCount + chatInc,
+        giftCount: prev.giftCount + giftInc,
+        giftTotalRmb: prev.giftTotalRmb + giftRmbInc,
+        giftBreakdown: Array.from(giftMapRef.current.entries())
+          .map(([name, data]) => ({ name, count: data.count, totalRmb: data.totalRmb }))
+          .sort((a, b) => b.totalRmb - a.totalRmb || b.count - a.count),
+        topGifters: Array.from(gifterMapRef.current.values())
+          .sort((a, b) => b.totalRmb - a.totalRmb || b.giftCount - a.giftCount)
+          .slice(0, 5),
+      }));
+
+      // 批量更新总点赞
+      setTotalLikes(maxLikesRef.current);
+
+      // 批量将消息推入视窗（维持最多 200 条节点以保证 DOM 极速渲染）
+      setMessages((prev) => {
+        const next = prev.concat(buffer);
+        return next.length > 200 ? next.slice(next.length - 200) : next;
+      });
+    }, 120);
+
+    return () => clearInterval(flushTimer);
+  }, [isOpen]);
+
+  // 3. 监听全局弹幕事件并写入缓冲区（纯 JS 内存操作，耗时 < 0.01ms）
   useEffect(() => {
     if (!isOpen) return;
 
@@ -129,117 +253,17 @@ export const LivePlayerModal: React.FC<LivePlayerModalProps> = ({
           if (!isMounted) return;
           const msg = event.payload;
           if (msg.room_id === room.room_id) {
-            // 维护当前直播间总点赞数
+            // 累计点赞数
             if (msg.payload.type === "like") {
               if (msg.payload.total && msg.payload.total > 0) {
-                setTotalLikes((prev) => Math.max(prev, msg.payload.total!));
+                maxLikesRef.current = Math.max(maxLikesRef.current, msg.payload.total);
               } else {
-                setTotalLikes((prev) => prev + (msg.payload.count || 1));
+                maxLikesRef.current += msg.payload.count || 1;
               }
             }
 
-            // 累加会话级全局统计（只增不减，不受视窗截断影响）
-            if (msg.payload.type === "chat") {
-              setStats((prev) => ({ ...prev, chatCount: prev.chatCount + 1 }));
-            } else if (msg.payload.type === "superchat") {
-              const rmb = msg.payload.price_rmb || 0;
-              const cur = giftMapRef.current.get("醒目留言") || { count: 0, totalRmb: 0 };
-              cur.count++;
-              cur.totalRmb += rmb;
-              giftMapRef.current.set("醒目留言", cur);
-
-              const uid = msg.user.user_id || msg.user.nickname;
-              const gifter = gifterMapRef.current.get(uid) || {
-                userId: uid,
-                nickname: msg.user.nickname,
-                totalRmb: 0,
-                giftCount: 0,
-              };
-              gifter.totalRmb += rmb;
-              gifter.giftCount++;
-              gifterMapRef.current.set(uid, gifter);
-
-              setStats((prev) => ({
-                ...prev,
-                chatCount: prev.chatCount + 1,
-                giftCount: prev.giftCount + 1,
-                giftTotalRmb: prev.giftTotalRmb + rmb,
-                giftBreakdown: Array.from(giftMapRef.current.entries())
-                  .map(([name, data]) => ({ name, count: data.count, totalRmb: data.totalRmb }))
-                  .sort((a, b) => b.totalRmb - a.totalRmb || b.count - a.count),
-                topGifters: Array.from(gifterMapRef.current.values())
-                  .sort((a, b) => b.totalRmb - a.totalRmb || b.giftCount - a.giftCount)
-                  .slice(0, 5),
-              }));
-            } else if (msg.payload.type === "gift") {
-              const count = msg.payload.count || 1;
-              const rmb = ((msg.payload.price_cents || 0) * count) / 100;
-              const name = msg.payload.gift_name || "未知礼物";
-              const cur = giftMapRef.current.get(name) || { count: 0, totalRmb: 0 };
-              cur.count += count;
-              cur.totalRmb += rmb;
-              giftMapRef.current.set(name, cur);
-
-              const uid = msg.user.user_id || msg.user.nickname;
-              const gifter = gifterMapRef.current.get(uid) || {
-                userId: uid,
-                nickname: msg.user.nickname,
-                totalRmb: 0,
-                giftCount: 0,
-              };
-              gifter.totalRmb += rmb;
-              gifter.giftCount += count;
-              gifterMapRef.current.set(uid, gifter);
-
-              setStats((prev) => ({
-                ...prev,
-                giftCount: prev.giftCount + count,
-                giftTotalRmb: prev.giftTotalRmb + rmb,
-                giftBreakdown: Array.from(giftMapRef.current.entries())
-                  .map(([name, data]) => ({ name, count: data.count, totalRmb: data.totalRmb }))
-                  .sort((a, b) => b.totalRmb - a.totalRmb || b.count - a.count),
-                topGifters: Array.from(gifterMapRef.current.values())
-                  .sort((a, b) => b.totalRmb - a.totalRmb || b.giftCount - a.giftCount)
-                  .slice(0, 5),
-              }));
-            }
-
-            // 右侧聊天列表（严格按消息唯一 ID 去重）
-            setMessages((prev) => {
-              if (prev.some((item) => item.id === msg.id)) {
-                return prev;
-              }
-              const next = [...prev, msg];
-              return next.length > 300 ? next.slice(next.length - 300) : next;
-            });
-
-            // 视频上层 Canvas 弹幕发射（去重）
-            if (!emittedIdsRef.current.has(msg.id)) {
-              emittedIdsRef.current.add(msg.id);
-              if (emittedIdsRef.current.size > 500) {
-                emittedIdsRef.current.clear();
-              }
-
-              if (msg.payload.type === "chat" && msg.payload.content) {
-                danmakuEngineRef.current?.emit(
-                  msg.payload.content,
-                  msg.payload.color || "#FFFFFF",
-                  false
-                );
-              } else if (msg.payload.type === "superchat" && msg.payload.content) {
-                danmakuEngineRef.current?.emit(
-                  `[醒目留言 ¥${msg.payload.price_rmb?.toFixed(0)}] ${msg.payload.content}`,
-                  "#F59E0B",
-                  false
-                );
-              } else if (msg.payload.type === "gift") {
-                danmakuEngineRef.current?.emit(
-                  `[礼物] ${msg.user.nickname} 送出 ${msg.payload.gift_name} x${msg.payload.count}`,
-                  "#FB923C",
-                  false
-                );
-              }
-            }
+            // 推入待渲染缓冲池
+            incomingBufferRef.current.push(msg);
           }
         });
 
@@ -272,11 +296,6 @@ export const LivePlayerModal: React.FC<LivePlayerModalProps> = ({
       }
     };
   }, [isOpen, room.room_id, room.platform, isRecording]);
-
-  // 聊天列表平滑自底滚动
-  useEffect(() => {
-    chatListEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
 
   // 控制条自动隐藏
   const handleMouseMove = () => {
@@ -421,7 +440,10 @@ export const LivePlayerModal: React.FC<LivePlayerModalProps> = ({
           messages={messages}
           filter={filter}
           setFilter={setFilter}
-          onClear={() => setMessages([])}
+          onClear={() => {
+            setMessages([]);
+            incomingBufferRef.current = [];
+          }}
           chatListEndRef={chatListEndRef}
           totalLikes={totalLikes}
           stats={stats}
