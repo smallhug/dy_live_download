@@ -92,28 +92,40 @@ pub struct ChatMessage {
 
 #[derive(Clone, PartialEq, Message)]
 pub struct GiftStruct {
-    #[prost(int64, tag = "1")]
-    pub id: i64,
+    #[prost(message, optional, tag = "1")]
+    pub image: ::core::option::Option<Image>,
     #[prost(string, tag = "2")]
+    pub describe: ::prost::alloc::string::String,
+    #[prost(bool, tag = "3")]
+    pub notify: bool,
+    #[prost(uint64, tag = "4")]
+    pub duration: u64,
+    #[prost(uint64, tag = "5")]
+    pub id: u64,
+    #[prost(uint32, tag = "12")]
+    pub diamond_count: u32,
+    #[prost(string, tag = "16")]
     pub name: ::prost::alloc::string::String,
-    #[prost(int32, tag = "3")]
-    pub diamond_count: i32,
 }
 
 #[derive(Clone, PartialEq, Message)]
 pub struct GiftMessage {
     #[prost(message, optional, tag = "1")]
     pub common: ::core::option::Option<Common>,
-    #[prost(int64, tag = "2")]
-    pub gift_id: i64,
-    #[prost(int64, tag = "3")]
-    pub fan_ticket_count: i64,
-    #[prost(int64, tag = "5")]
-    pub repeat_count: i64,
-    #[prost(int64, tag = "6")]
-    pub combo_count: i64,
+    #[prost(uint64, tag = "2")]
+    pub gift_id: u64,
+    #[prost(uint64, tag = "3")]
+    pub fan_ticket_count: u64,
+    #[prost(uint64, tag = "4")]
+    pub group_count: u64,
+    #[prost(uint64, tag = "5")]
+    pub repeat_count: u64,
+    #[prost(uint64, tag = "6")]
+    pub combo_count: u64,
     #[prost(message, optional, tag = "7")]
     pub user: ::core::option::Option<User>,
+    #[prost(message, optional, tag = "8")]
+    pub to_user: ::core::option::Option<User>,
     #[prost(message, optional, tag = "15")]
     pub gift: ::core::option::Option<GiftStruct>,
 }

@@ -449,6 +449,87 @@ mod tests {
             }
         }
     }
+
+    #[tokio::test]
+    async fn test_parse_71564838536() {
+        let room_id = "71564838536";
+        let client = reqwest::Client::new();
+        let res = parse_douyin_live(&client, room_id, "", "", "").await;
+        println!("\n=== 直播间 71564838536 基本信息解析结果 ===");
+        match res {
+            Ok(info) => {
+                println!("房间号 (web_rid): {}", info.room_id);
+                println!("主播名称: {}", info.anchor_name);
+                println!("直播标题: {}", info.title);
+                println!("是否正在直播: {}", info.is_live);
+                println!("内部长房间号 (internal_room_id): {:?}", info.internal_room_id);
+                println!("可用画质流数量: {}", info.streams.len());
+                for s in &info.streams {
+                    println!("  - 画质: {}", s.quality_name);
+                }
+
+                if info.is_live {
+                    let internal_id = info.internal_room_id.clone();
+                    println!("内部长房间号: {:?}", internal_id);
+
+                    println!("\n=== 正在启动 run_douyin_danmaku_loop 实时捕获弹幕与礼物 (采样 4 秒) ===");
+                    let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+                    let cancel_token = tokio_util::sync::CancellationToken::new();
+                    let cancel_token_clone = cancel_token.clone();
+
+                    let handle = tokio::spawn(async move {
+                        crate::danmaku::douyin::run_douyin_danmaku_loop(
+                            room_id.to_string(),
+                            internal_id,
+                            String::new(),
+                            String::new(),
+                            tx,
+                            cancel_token_clone,
+                        ).await;
+                    });
+
+                    let timeout = tokio::time::sleep(std::time::Duration::from_secs(4));
+                    tokio::pin!(timeout);
+
+                    let mut count = 0;
+                    loop {
+                        tokio::select! {
+                            _ = &mut timeout => {
+                                println!("\n>>> 实时捕获采样结束 <<<");
+                                cancel_token.cancel();
+                                break;
+                            }
+                            Some(msg) = rx.recv() => {
+                                count += 1;
+                                match msg.payload {
+                                    crate::danmaku::model::LiveMessagePayload::Chat { content, .. } => {
+                                        println!("  [💬 弹幕] {}: {}", msg.user.nickname, content);
+                                    }
+                                    crate::danmaku::model::LiveMessagePayload::Gift { gift_name, count, price_cents, combo_count, .. } => {
+                                        println!("  [🎁 礼物] {} 送出了 {} x{} (价值{}分, 连击{:?})", msg.user.nickname, gift_name, count, price_cents, combo_count);
+                                    }
+                                    crate::danmaku::model::LiveMessagePayload::Like { count, total } => {
+                                        println!("  [❤️ 点赞] {} 点赞了 ({}次, 累计: {:?})", msg.user.nickname, count, total);
+                                    }
+                                    crate::danmaku::model::LiveMessagePayload::Enter => {
+                                        println!("  [🚪 进房] {} 进入了直播间", msg.user.nickname);
+                                    }
+                                    crate::danmaku::model::LiveMessagePayload::SuperChat { content, price_rmb, .. } => {
+                                        println!("  [🌟 醒目留言 ¥{:.1}] {}: {}", price_rmb, msg.user.nickname, content);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    let _ = handle.await;
+                    println!("本次采样共捕获到 {} 条实时直播间消息", count);
+                }
+            }
+            Err(e) => {
+                println!("解析失败: {}", e);
+            }
+        }
+    }
     #[test]
     fn test_quality_mapping() {
         assert_eq!(map_quality_name("ORIGIN"), "origin");
