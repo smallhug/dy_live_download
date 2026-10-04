@@ -1,4 +1,4 @@
-use chrono::Local;
+use chrono::{Local, Utc};
 use log::{info, warn, error};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -10,6 +10,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 use tauri::{AppHandle, Emitter};
+use crate::danmaku::DanmakuManager;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RecordProgress {
@@ -42,9 +43,11 @@ static RE_PROGRESS_KEY_VALUE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(
 static RE_ERROR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)(error|failed|invalid|permission denied|connection refused|timeout|no such file|\b404\b|\b403\b|\b502\b|\b503\b)").unwrap());
 
 // 启动录制任务
+#[allow(clippy::too_many_arguments)]
 pub async fn start_recording(
     app: AppHandle,
     state: tauri::State<'_, RecorderState>,
+    danmaku_manager: tauri::State<'_, DanmakuManager>,
     room_id: String,
     anchor_name: String,
     title: String,       // 新增：直播间标题
@@ -54,6 +57,10 @@ pub async fn start_recording(
     segment_duration_mins: u64,
     user_agent: String,  // 新增：用户配置的 UA
     platform: String,    // 新增：平台
+    record_danmaku: bool,
+    danmaku_format: String,
+    internal_room_id: Option<String>,
+    cookie: String,
 ) -> Result<(), String> {
     let mut tasks = state.tasks.lock().await;
     if tasks.contains_key(&room_id) {
@@ -187,12 +194,32 @@ pub async fn start_recording(
                 child,
             };
             tasks.insert(room_id.clone(), task);
-            
+
+            let danmaku_manager_inner = danmaku_manager.inner().clone();
+            if record_danmaku {
+                let danmaku_ext = match danmaku_format.as_str() {
+                    "jsonl" => "jsonl",
+                    _ => "xml",
+                };
+                let danmaku_file = save_path.join(format!("{}_{}.{}", safe_anchor_name, time_str, danmaku_ext));
+                let start_time_ms = Utc::now().timestamp_millis() as u64;
+                danmaku_manager_inner.start_session(
+                    app.clone(),
+                    platform.clone(),
+                    room_id.clone(),
+                    internal_room_id.clone(),
+                    cookie.clone(),
+                    user_agent.clone(),
+                    Some((danmaku_file, danmaku_format.clone(), start_time_ms)),
+                ).await;
+            }
+
             // 启动异步任务监控进度（必须在 Ok 分支内）
             let room_id_clone = room_id.clone();
             let title_clone = title.clone();
             let tasks_clone = state.tasks.clone();
             let app_clone = app.clone();
+            let danmaku_cleanup = danmaku_manager.inner().clone();
 
             tauri::async_runtime::spawn(async move {
                 let mut reader = BufReader::new(stderr).lines();
@@ -273,6 +300,8 @@ pub async fn start_recording(
                 info!("stderr 流已关闭 (共读取{}行)，等待进程完全退出...", line_count);
 
                 // ffmpeg 结束后的清理
+                danmaku_cleanup.stop_session(&room_id_clone).await;
+
                 // 1. 在独立作用域中移除任务，之后锁会被立即释放
                 let removed_task = {
                     let mut lock = tasks_clone.lock().await;
@@ -304,12 +333,12 @@ pub async fn start_recording(
                 }
             });
 
-            return Ok(());
+            Ok(())
         }
         Err(e) => {
             let err_msg = format!("启动 FFmpeg 失败! 可执行文件: {}, 错误原因: {}, 请检查: FFmpeg 路径是否正确、文件是否存在、是否有执行权限", ffmpeg_exe, e);
             error!("{}", err_msg);
-            return Err(err_msg);
+            Err(err_msg)
         }
     }
 }
@@ -317,8 +346,12 @@ pub async fn start_recording(
 // 停止录制
 pub async fn stop_recording(
     state: tauri::State<'_, RecorderState>,
+    danmaku_manager: tauri::State<'_, DanmakuManager>,
     room_id: &str,
 ) -> Result<(), String> {
+    // 停止关联的弹幕会话
+    danmaku_manager.stop_session(room_id).await;
+
     // 1. 获取锁，提取出 child 的 stdin 并写入 'q' 优雅退出
     let mut tasks = state.tasks.lock().await;
     if let Some(task) = tasks.get_mut(room_id) {

@@ -190,10 +190,8 @@ pub async fn parse_bilibili_live(
                                                 if codec_name == "avc" || stream_entry.flv_url.is_none() {
                                                     stream_entry.flv_url = Some(full_url);
                                                 }
-                                            } else if is_hls {
-                                                if codec_name == "avc" || stream_entry.m3u8_url.is_none() {
-                                                    stream_entry.m3u8_url = Some(full_url);
-                                                }
+                                            } else if is_hls && (codec_name == "avc" || stream_entry.m3u8_url.is_none()) {
+                                                stream_entry.m3u8_url = Some(full_url);
                                             }
                                         }
                                     }
@@ -220,6 +218,7 @@ pub async fn parse_bilibili_live(
         title,
         is_live,
         streams,
+        internal_room_id: Some(real_room_id.to_string()),
     })
 }
 

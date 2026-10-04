@@ -4,10 +4,14 @@ mod recorder;
 mod monitor;
 mod telemetry;
 mod logger;
+pub mod danmaku;
+mod proxy;
 
 use config::{load_config, save_config, AppConfig, RoomConfig, CookieItem, AppConfigState};
 use parsers::LiveRoomInfo;
 use recorder::{get_active_recordings, start_recording, stop_recording, RecorderState};
+use danmaku::DanmakuManager;
+use proxy::{start_stream_proxy, ProxyState};
 use serde::{Deserialize, Serialize};
 use log::{info, warn, error};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -32,6 +36,7 @@ fn get_config(state: State<'_, AppConfigState>) -> AppConfig {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 fn update_global_config(
     app: AppHandle,
     state: State<'_, AppConfigState>,
@@ -45,6 +50,8 @@ fn update_global_config(
     silent_start: bool,
     close_to_tray: bool,
     has_seen_guide: bool,
+    record_danmaku: Option<bool>,
+    danmaku_format: Option<String>,
 ) -> Result<(), String> {
     let mut config = state.0.write().unwrap();
     config.global.ffmpeg_path = ffmpeg_path;
@@ -57,6 +64,12 @@ fn update_global_config(
     config.global.silent_start = silent_start;
     config.global.close_to_tray = close_to_tray;
     config.global.has_seen_guide = has_seen_guide;
+    if let Some(rd) = record_danmaku {
+        config.global.record_danmaku = rd;
+    }
+    if let Some(df) = danmaku_format {
+        config.global.danmaku_format = df;
+    }
     save_config(&app, &config)?;
 
     // 联动更新系统开机自启动设置
@@ -90,6 +103,7 @@ async fn parse_room(
 
 // 4. 添加直播间
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn add_room(
     app: AppHandle,
     state: State<'_, AppConfigState>,
@@ -118,14 +132,19 @@ async fn add_room(
         return Err("该直播间已在任务列表中".to_string());
     }
 
+    let record_danmaku = config.global.record_danmaku;
+    let danmaku_format = config.global.danmaku_format.clone();
+
     let new_room = RoomConfig {
         room_id: info.room_id,
         anchor_name: info.anchor_name,
         is_monitoring,
         preferred_quality,
         segment_duration_mins,
-        auto_record: true,
+        auto_record: false,
         platform: platform_str,
+        record_danmaku,
+        danmaku_format,
     };
 
     config.rooms.push(new_room.clone());
@@ -139,11 +158,12 @@ async fn add_room(
 async fn delete_room(
     app: AppHandle,
     state: State<'_, RecorderState>,
+    danmaku_manager: State<'_, DanmakuManager>,
     config_state: State<'_, AppConfigState>,
     room_id: String,
 ) -> Result<(), String> {
     // 如果该房间正在录制，先强行停止录制
-    let _ = stop_recording(state, &room_id).await;
+    let _ = stop_recording(state, danmaku_manager, &room_id).await;
 
     let mut config = config_state.0.write().unwrap();
     config.rooms.retain(|r| r.room_id != room_id);
@@ -172,6 +192,7 @@ fn update_room_config(
 async fn start_record_task(
     app: AppHandle,
     state: State<'_, RecorderState>,
+    danmaku_manager: State<'_, DanmakuManager>,
     config_state: State<'_, AppConfigState>,
     http_state: State<'_, HttpClientState>,
     room_id: String,
@@ -197,16 +218,16 @@ async fn start_record_task(
     };
 
     let platform_str = room.platform.clone();
-    // 负载均衡选择并自增一个 Cookie 
+    // 负载均衡选择并自增一个 Cookie
     let cookie = get_and_increment_cookie(&app, &config_state, &platform_str);
 
     info!("主播: {}, 房间ID: {}, 平台: {}", room.anchor_name, room.room_id, platform_str);
 
     // 开始解析流地址
     let info = parsers::parse_live(&http_state.0, &platform_str, &room.room_id, &cookie, &user_agent, &sec_ch_ua, &room.preferred_quality).await?;
-    
+
     info!("解析结果 - is_live: {}, streams数量: {}", info.is_live, info.streams.len());
-    
+
     if !info.is_live {
         return Err("主播未开播，无法手动录制".to_string());
     }
@@ -217,8 +238,8 @@ async fn start_record_task(
     // 打印所有可用的流
     for (idx, stream) in info.streams.iter().enumerate() {
         info!(
-            "流[{}]: 画质={}, FLV={}, M3U8={}", 
-            idx, 
+            "流[{}]: 画质={}, FLV={}, M3U8={}",
+            idx,
             stream.quality_name,
             stream.flv_url.as_ref().map(|s| truncate_str(s, 50)).unwrap_or("无"),
             stream.m3u8_url.as_ref().map(|s| truncate_str(s, 50)).unwrap_or("无")
@@ -244,6 +265,7 @@ async fn start_record_task(
     start_recording(
         app,
         state,
+        danmaku_manager,
         room_id,
         info.anchor_name,
         info.title, // 传入直播标题
@@ -253,6 +275,10 @@ async fn start_record_task(
         room.segment_duration_mins,
         user_agent,  // 传入用户配置的 UA
         platform_str,
+        room.record_danmaku,
+        room.danmaku_format,
+        info.internal_room_id,
+        cookie,
     )
     .await?;
 
@@ -262,8 +288,77 @@ async fn start_record_task(
 
 // 8. 手动停止录制
 #[tauri::command]
-async fn stop_record_task(state: State<'_, RecorderState>, room_id: String) -> Result<(), String> {
-    stop_recording(state, &room_id).await
+async fn stop_record_task(
+    state: State<'_, RecorderState>,
+    danmaku_manager: State<'_, DanmakuManager>,
+    room_id: String,
+) -> Result<(), String> {
+    stop_recording(state, danmaku_manager, &room_id).await
+}
+
+// 启动弹幕独立预览（不关联录制视频）
+#[tauri::command]
+async fn start_danmaku_preview(
+    app: AppHandle,
+    danmaku_manager: State<'_, DanmakuManager>,
+    config_state: State<'_, AppConfigState>,
+    http_state: State<'_, HttpClientState>,
+    room_id: String,
+    platform: Option<String>,
+) -> Result<(), String> {
+    info!("启动弹幕独立预览: room_id={}, platform={:?}", room_id, platform);
+    let (user_agent, sec_ch_ua, platform_str) = {
+        let config = config_state.0.read().unwrap();
+        let room = config.rooms.iter().find(|r| r.room_id == room_id).cloned();
+        let platform_str = platform
+            .or_else(|| room.as_ref().map(|r| r.platform.clone()))
+            .unwrap_or_else(|| "douyin".to_string());
+        let user_agent = config.global.user_agent.clone();
+        let sec_ch_ua = config.global.sec_ch_ua.clone();
+        (user_agent, sec_ch_ua, platform_str)
+    };
+    let cookie = get_and_increment_cookie(&app, &config_state, &platform_str);
+
+    let internal_room_id = if platform_str == "douyin" {
+        match parsers::douyin::parse_douyin_live(&http_state.0, &room_id, &cookie, &user_agent, &sec_ch_ua).await {
+            Ok(info) => info.internal_room_id,
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
+    danmaku_manager.start_session(
+        app,
+        platform_str,
+        room_id,
+        internal_room_id,
+        cookie,
+        user_agent,
+        None, // 纯预览不写入文件
+    ).await;
+
+    Ok(())
+}
+
+// 停止弹幕独立预览
+#[tauri::command]
+async fn stop_danmaku_preview(
+    danmaku_manager: State<'_, DanmakuManager>,
+    room_id: String,
+) -> Result<(), String> {
+    info!("停止弹幕独立预览: room_id={}", room_id);
+    danmaku_manager.stop_session(&room_id).await;
+    Ok(())
+}
+
+// 检查弹幕预览是否正在运行
+#[tauri::command]
+async fn is_danmaku_active(
+    danmaku_manager: State<'_, DanmakuManager>,
+    room_id: String,
+) -> Result<bool, String> {
+    Ok(danmaku_manager.is_active(&room_id).await)
 }
 
 // 9. 获取当前正在录制的直播间列表
@@ -429,7 +524,7 @@ async fn open_login_window(app: AppHandle, platform: Option<String>) -> Result<(
 
         #[cfg(debug_assertions)]
         {
-            let _ = window.open_devtools();
+            window.open_devtools();
         }
     } else {
         if let Some(old_window) = app.get_webview_window("douyin-login") {
@@ -454,7 +549,7 @@ async fn open_login_window(app: AppHandle, platform: Option<String>) -> Result<(
 
         #[cfg(debug_assertions)]
         {
-            let _ = window.open_devtools();
+            window.open_devtools();
         }
     }
 
@@ -798,6 +893,18 @@ async fn validate_cookie(
     }
 }
 
+// 14. 获取流媒体代理本地访问地址
+#[tauri::command]
+fn get_stream_proxy_url(
+    state: State<'_, ProxyState>,
+    stream_url: String,
+    platform: Option<String>,
+) -> String {
+    let platform_str = platform.unwrap_or_else(|| "douyin".to_string());
+    let encoded_url = url::form_urlencoded::byte_serialize(stream_url.as_bytes()).collect::<String>();
+    format!("http://127.0.0.1:{}/stream?url={}&platform={}", state.port, encoded_url, platform_str)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
@@ -811,6 +918,7 @@ pub fn run() {
             }
         }))
         .manage(RecorderState::new())
+        .manage(DanmakuManager::new())
         .on_menu_event(|app, event| {
             info!("全局菜单事件触发: ID={}", event.id.as_ref());
             match event.id.as_ref() {
@@ -919,6 +1027,12 @@ pub fn run() {
             let tray = tray_builder.build(app)?;
             app.manage(tray);
 
+            // 启动本地流媒体代理服务器
+            let proxy_port = tauri::async_runtime::block_on(async {
+                start_stream_proxy().await.expect("Failed to start stream proxy")
+            });
+            app.manage(ProxyState { port: proxy_port });
+
             monitor::start_monitor_loop(app_handle.clone());
             telemetry::start_telemetry_loop(app_handle);
             Ok(())
@@ -939,7 +1053,11 @@ pub fn run() {
             get_cookie_nickname,
             check_login_status,
             validate_cookie,
-            convert_video
+            convert_video,
+            start_danmaku_preview,
+            stop_danmaku_preview,
+            is_danmaku_active,
+            get_stream_proxy_url
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -964,7 +1082,7 @@ pub fn run() {
                 for (room_id, task) in tasks.iter_mut() {
                     info!("给任务 {} 的子进程发送优雅退出信号", room_id);
                     if let Some(mut stdin) = task.child.stdin.take() {
-                        let _ = tokio::spawn(async move {
+                        tokio::spawn(async move {
                             use tokio::io::AsyncWriteExt;
                             let _ = stdin.write_all(b"q").await;
                             let _ = stdin.flush().await;

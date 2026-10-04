@@ -17,6 +17,8 @@ pub struct LiveRoomInfo {
     pub title: String,
     pub is_live: bool,
     pub streams: Vec<LiveStream>,
+    #[serde(default)]
+    pub internal_room_id: Option<String>,
 }
 
 pub trait LiveParser: Send + Sync {

@@ -30,18 +30,7 @@ pub fn start_monitor_loop(app: AppHandle) {
                     (global, monitoring_rooms)
                 } else {
                     (
-                        crate::config::GlobalConfig {
-                            ffmpeg_path: "".to_string(),
-                            save_dir: "".to_string(),
-                            cookies: Vec::new(),
-                            user_agent: "".to_string(),
-                            sec_ch_ua: "".to_string(),
-                            monitor_interval_secs: 180,
-                            autostart: false,
-                            silent_start: false,
-                            close_to_tray: false,
-                            has_seen_guide: false,
-                        },
+                        crate::config::AppConfig::default().global,
                         Vec::new(),
                     )
                 };
@@ -124,12 +113,14 @@ pub fn start_monitor_loop(app: AppHandle) {
                                                 .or_else(|| stream.m3u8_url.clone());
 
                                             if let Some(url) = stream_url {
-                                                if let Some(recorder_state) =
-                                                    app_clone.try_state::<RecorderState>()
-                                                {
+                                                if let (Some(recorder_state), Some(danmaku_state)) = (
+                                                    app_clone.try_state::<RecorderState>(),
+                                                    app_clone.try_state::<crate::danmaku::DanmakuManager>(),
+                                                ) {
                                                     let res = start_recording(
                                                         app_clone.clone(),
                                                         recorder_state,
+                                                        danmaku_state,
                                                         room_clone.room_id.clone(),
                                                         info.anchor_name.clone(),
                                                         info.title.clone(), // 传入直播标题
@@ -139,6 +130,10 @@ pub fn start_monitor_loop(app: AppHandle) {
                                                         room_clone.segment_duration_mins,
                                                         global_clone.user_agent.clone(), // 传入用户配置 of UA
                                                         room_clone.platform.clone(),
+                                                        room_clone.record_danmaku,
+                                                        room_clone.danmaku_format.clone(),
+                                                        info.internal_room_id.clone(),
+                                                        cookie.clone(),
                                                     )
                                                     .await;
 

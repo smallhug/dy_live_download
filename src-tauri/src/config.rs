@@ -21,6 +21,14 @@ pub struct GlobalConfig {
     pub close_to_tray: bool,
     #[serde(default)]
     pub has_seen_guide: bool,
+    #[serde(default = "default_true")]
+    pub record_danmaku: bool,
+    #[serde(default = "default_danmaku_format")]
+    pub danmaku_format: String,
+}
+
+fn default_danmaku_format() -> String {
+    "xml".to_string()
 }
 
 fn default_true() -> bool {
@@ -49,10 +57,14 @@ pub struct RoomConfig {
     pub is_monitoring: bool,      // 是否开启监控
     pub preferred_quality: String, // 偏好画质: 原画, 蓝光, 超清, 高清
     pub segment_duration_mins: u64, // 分段时长(分钟)，0表示不分段
-    #[serde(default = "default_true")]
-    pub auto_record: bool,         // 开播后是否自动录制
+    #[serde(default)]
+    pub auto_record: bool,         // 开播后是否自动录制（默认为 false）
     #[serde(default = "default_platform")]
     pub platform: String,          // 平台
+    #[serde(default = "default_true")]
+    pub record_danmaku: bool,      // 是否录制弹幕
+    #[serde(default = "default_danmaku_format")]
+    pub danmaku_format: String,    // 弹幕格式: "xml" | "jsonl"
 }
 
 
@@ -76,6 +88,8 @@ impl Default for AppConfig {
                 silent_start: false,
                 close_to_tray: false,
                 has_seen_guide: false,
+                record_danmaku: true,
+                danmaku_format: "xml".to_string(),
             },
             rooms: Vec::new(),
         }

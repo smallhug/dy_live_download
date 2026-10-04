@@ -18,8 +18,8 @@ pub fn start_telemetry_loop(app: AppHandle) {
         let mut networks = Networks::new_with_refreshed_list();
 
         let mut last_time = std::time::Instant::now();
-        let mut last_recv: u64 = networks.iter().map(|(_, n)| n.received()).sum();
-        let mut last_sent: u64 = networks.iter().map(|(_, n)| n.transmitted()).sum();
+        let mut last_recv: u64 = networks.values().map(|n| n.received()).sum();
+        let mut last_sent: u64 = networks.values().map(|n| n.transmitted()).sum();
 
         loop {
             tokio::time::sleep(Duration::from_millis(1500)).await;
@@ -39,8 +39,8 @@ pub fn start_telemetry_loop(app: AppHandle) {
             let elapsed = if elapsed > 0.1 { elapsed } else { 1.5 };
             last_time = std::time::Instant::now();
 
-            let cur_recv: u64 = networks.iter().map(|(_, n)| n.received()).sum();
-            let cur_sent: u64 = networks.iter().map(|(_, n)| n.transmitted()).sum();
+            let cur_recv: u64 = networks.values().map(|n| n.received()).sum();
+            let cur_sent: u64 = networks.values().map(|n| n.transmitted()).sum();
 
             let net_recv = ((cur_recv.saturating_sub(last_recv)) as f64 / elapsed) as u64;
             let net_sent = ((cur_sent.saturating_sub(last_sent)) as f64 / elapsed) as u64;
