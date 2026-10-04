@@ -72,12 +72,6 @@ pub struct User {
     pub id: u64,
     #[prost(string, tag = "3")]
     pub nickname: ::prost::alloc::string::String,
-    #[prost(string, tag = "38")]
-    pub display_id: ::prost::alloc::string::String,
-    #[prost(string, tag = "46")]
-    pub sec_uid: ::prost::alloc::string::String,
-    #[prost(message, optional, tag = "64")]
-    pub avatar_thumb: ::core::option::Option<Image>,
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -92,14 +86,8 @@ pub struct ChatMessage {
 
 #[derive(Clone, PartialEq, Message)]
 pub struct GiftStruct {
-    #[prost(message, optional, tag = "1")]
-    pub image: ::core::option::Option<Image>,
     #[prost(string, tag = "2")]
     pub describe: ::prost::alloc::string::String,
-    #[prost(bool, tag = "3")]
-    pub notify: bool,
-    #[prost(uint64, tag = "4")]
-    pub duration: u64,
     #[prost(uint64, tag = "5")]
     pub id: u64,
     #[prost(uint32, tag = "12")]
