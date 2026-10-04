@@ -60,7 +60,7 @@ pub fn start_monitor_loop(app: AppHandle) {
                     // 异步拉起检测，防止阻塞其他房间检测
                     let cookie = if let Some(config_state) = app_clone.try_state::<AppConfigState>()
                     {
-                        crate::get_and_increment_cookie(
+                        crate::auth::get_and_increment_cookie(
                             &app_clone,
                             &config_state,
                             &room_clone.platform,
