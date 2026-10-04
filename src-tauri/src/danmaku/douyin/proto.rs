@@ -141,3 +141,15 @@ pub struct MemberMessage {
     #[prost(int64, tag = "10")]
     pub action: i64,
 }
+
+#[derive(Clone, PartialEq, Message)]
+pub struct FansclubMessage {
+    #[prost(message, optional, tag = "1")]
+    pub common: ::core::option::Option<Common>,
+    #[prost(int32, tag = "2")]
+    pub type_code: i32,
+    #[prost(string, tag = "3")]
+    pub content: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "4")]
+    pub user: ::core::option::Option<User>,
+}

@@ -1,5 +1,5 @@
 use crate::danmaku::douyin::proto::{
-    ChatMessage, GiftMessage, LikeMessage, MemberMessage, PushFrame, Response,
+    ChatMessage, FansclubMessage, GiftMessage, LikeMessage, MemberMessage, PushFrame, Response,
 };
 use crate::danmaku::model::{LiveMessage, LiveMessagePayload, LiveMessageUser};
 use chrono::Utc;
@@ -27,6 +27,37 @@ pub fn get_douyin_preset_gift_name(gift_id: u64) -> Option<&'static str> {
         3334 => Some("粉丝团灯牌"),
         _ => None,
     }
+}
+
+// 清洗富文本礼物描述字符串（例如 "XXXXX送出了【图片】粉丝团灯牌 × 1" 或 "{0:user} 送出了 {1:image}粉丝团灯牌 × {2:string}"）
+pub fn clean_gift_name_and_count(raw: &str) -> (String, Option<u32>) {
+    let mut s = raw.trim();
+    if let Some(pos) = s.find("送出了") {
+        s = &s[pos + "送出了".len()..];
+    }
+    // 移除富文本占位符与图片标记
+    let cleaned = s
+        .replace("{0:user}", "")
+        .replace("{1:image}", "")
+        .replace("{1:gift}", "")
+        .replace("{2:string}", "")
+        .replace("【图片】", "")
+        .replace("[图片]", "")
+        .replace("【图标】", "")
+        .replace("[图标]", "");
+
+    let cleaned_trim = cleaned.trim();
+    // 提取结尾的数量乘数，如 "× 1", "x 10", "* 5", "×1"
+    let re_cnt = regex::Regex::new(r"[\s×xX*]\s*(\d+)$").unwrap();
+    if let Some(caps) = re_cnt.captures(cleaned_trim) {
+        let count: u32 = caps[1].parse().unwrap_or(1);
+        let name = cleaned_trim[..caps.get(0).unwrap().start()].trim().to_string();
+        if !name.is_empty() {
+            return (name, Some(count));
+        }
+    }
+
+    (cleaned_trim.to_string(), None)
 }
 
 // ──────────────────────────────────────────────
@@ -108,6 +139,68 @@ pub fn decode_gift_raw(bytes: &[u8]) -> Option<RawGiftInfo> {
         let wire_type = key & 7;
 
         match (field_num, wire_type) {
+            (1, 2) => {
+                // Common 消息头，提取 Tag 8 (display_text) 中的 Tag 2 (default_pattern)
+                let len = read_varint(bytes, &mut offset)? as usize;
+                if offset + len > bytes.len() {
+                    return None;
+                }
+                let sub = &bytes[offset..offset + len];
+                offset += len;
+
+                let mut sub_offset = 0;
+                while sub_offset < sub.len() {
+                    let sub_key = match read_varint(sub, &mut sub_offset) {
+                        Some(k) => k,
+                        None => break,
+                    };
+                    let sub_fn = sub_key >> 3;
+                    let sub_wt = sub_key & 7;
+                    if sub_fn == 8 && sub_wt == 2 {
+                        // display_text 消息体
+                        if let Some(dt_len) = read_varint(sub, &mut sub_offset) {
+                            let dt_len = dt_len as usize;
+                            if sub_offset + dt_len <= sub.len() {
+                                let dt_bytes = &sub[sub_offset..sub_offset + dt_len];
+                                sub_offset += dt_len;
+
+                                let mut dt_offset = 0;
+                                while dt_offset < dt_bytes.len() {
+                                    let dt_key = match read_varint(dt_bytes, &mut dt_offset) {
+                                        Some(k) => k,
+                                        None => break,
+                                    };
+                                    let dt_fn = dt_key >> 3;
+                                    let dt_wt = dt_key & 7;
+                                    if dt_fn == 2 && dt_wt == 2 {
+                                        // default_pattern
+                                        if let Some(pat_len) = read_varint(dt_bytes, &mut dt_offset) {
+                                            let pat_len = pat_len as usize;
+                                            if dt_offset + pat_len <= dt_bytes.len() {
+                                                let pattern_str = String::from_utf8_lossy(&dt_bytes[dt_offset..dt_offset + pat_len]);
+                                                dt_offset += pat_len;
+                                                let (cleaned_name, parsed_cnt) = clean_gift_name_and_count(&pattern_str);
+                                                if gift_name.is_empty() && !cleaned_name.is_empty() {
+                                                    gift_name = cleaned_name;
+                                                }
+                                                if repeat_count == 0 && combo_count == 0 {
+                                                    if let Some(cnt) = parsed_cnt {
+                                                        repeat_count = cnt as u64;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else if !skip_field(dt_wt, dt_bytes, &mut dt_offset) {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    } else if !skip_field(sub_wt, sub, &mut sub_offset) {
+                        break;
+                    }
+                }
+            }
             (2, 0) => {
                 gift_id = read_varint(bytes, &mut offset)?;
             }
@@ -238,15 +331,28 @@ pub fn decode_gift_raw(bytes: &[u8]) -> Option<RawGiftInfo> {
     }
 
     if gift_id > 0 || !gift_name.is_empty() {
+        let (cleaned_name, parsed_cnt) = clean_gift_name_and_count(&gift_name);
+        let final_gift_name = if !cleaned_name.is_empty() {
+            cleaned_name
+        } else {
+            gift_name
+        };
+        let mut final_repeat_count = repeat_count;
+        if let Some(cnt) = parsed_cnt {
+            if repeat_count == 0 && combo_count == 0 {
+                final_repeat_count = cnt as u64;
+            }
+        }
+
         Some(RawGiftInfo {
             gift_id,
             fan_ticket_count,
-            repeat_count,
+            repeat_count: final_repeat_count,
             combo_count,
             group_count,
             user_id,
             nickname,
-            gift_name,
+            gift_name: final_gift_name,
             diamond_count,
         })
     } else {
@@ -352,7 +458,7 @@ pub fn parse_douyin_messages(room_id: &str, response: &Response) -> Vec<LiveMess
                     "观众".to_string()
                 };
 
-                let gift_name = if !gift_data.gift_name.is_empty() {
+                let raw_name = if !gift_data.gift_name.is_empty() {
                     gift_data.gift_name
                 } else if let Some(preset) = get_douyin_preset_gift_name(gift_data.gift_id) {
                     preset.to_string()
@@ -360,16 +466,25 @@ pub fn parse_douyin_messages(room_id: &str, response: &Response) -> Vec<LiveMess
                     format!("礼物{}", gift_data.gift_id)
                 };
 
-                let count = gift_data
+                // 清洗富文本占位符（如包含【图片】或送出了）
+                let (gift_name, parsed_cnt) = clean_gift_name_and_count(&raw_name);
+
+                let mut count = gift_data
                     .repeat_count
                     .max(gift_data.combo_count)
                     .max(gift_data.group_count)
                     .max(1) as u32;
 
+                if count <= 1 {
+                    if let Some(c) = parsed_cnt {
+                        count = c;
+                    }
+                }
+
                 let price_cents = if gift_data.diamond_count > 0 {
                     (gift_data.diamond_count as u64) * 10
-                } else if gift_data.gift_id == 4 {
-                    // 小心心单价 1 抖币 = 10 分
+                } else if gift_data.gift_id == 4 || gift_data.gift_id == 3334 || gift_name.contains("灯牌") {
+                    // 小心心、粉丝团灯牌单价固定为 1 抖币 = 10 分
                     10 * (count as u64)
                 } else if gift_data.fan_ticket_count > 0 {
                     gift_data.fan_ticket_count * 10
@@ -415,6 +530,62 @@ pub fn parse_douyin_messages(room_id: &str, response: &Response) -> Vec<LiveMess
                     method,
                     msg.payload.len()
                 );
+            }
+        } else if method == "WebcastFansclubMessage" {
+            // 解析加入粉丝团事件（通过专属 Protobuf 结构反序列化真实用户名与事件描述）
+            if let Ok(fans_msg) = FansclubMessage::decode(&msg.payload[..]) {
+                let user = fans_msg.user.unwrap_or_default();
+                let user_id = if user.id > 0 {
+                    user.id.to_string()
+                } else {
+                    format!("dy_user_{}", msg.msg_id)
+                };
+                let nickname = if !user.nickname.is_empty() {
+                    user.nickname
+                } else {
+                    "粉丝团成员".to_string()
+                };
+
+                let raw_content = if !fans_msg.content.is_empty() {
+                    fans_msg.content
+                } else {
+                    "加入粉丝团".to_string()
+                };
+                let gift_name = if raw_content.contains("加入粉丝团") {
+                    "加入粉丝团".to_string()
+                } else if raw_content.contains("升级") {
+                    "粉丝团升级".to_string()
+                } else if raw_content.contains("灯牌") {
+                    "粉丝团灯牌".to_string()
+                } else {
+                    let (cleaned, _) = clean_gift_name_and_count(&raw_content);
+                    if cleaned.is_empty() {
+                        "加入粉丝团".to_string()
+                    } else {
+                        cleaned
+                    }
+                };
+
+                results.push(LiveMessage {
+                    id: format!("dy_fans_{}_{}", user_id, msg.msg_id),
+                    platform: "douyin".to_string(),
+                    room_id: room_id.to_string(),
+                    timestamp_ms: now_ms,
+                    user: LiveMessageUser {
+                        user_id,
+                        nickname,
+                        avatar_url: None,
+                        badge_name: Some("粉丝团".to_string()),
+                        badge_level: Some(1),
+                    },
+                    payload: LiveMessagePayload::Gift {
+                        gift_name,
+                        gift_id: 3334,
+                        count: 1,
+                        price_cents: 10,
+                        combo_count: None,
+                    },
+                });
             }
         } else if method == "WebcastLikeMessage" {
             if let Ok(like) = LikeMessage::decode(&msg.payload[..]) {
@@ -640,6 +811,124 @@ mod tests {
                 assert_eq!(*price_cents, 50); // 5 * 10分
             }
             _ => panic!("Expected Gift payload"),
+        }
+    }
+
+    #[test]
+    fn test_clean_gift_name_and_count() {
+        // 测试剥离【图片】与占位符
+        let (name1, cnt1) = clean_gift_name_and_count("张三送出了【图片】粉丝团灯牌 × 1");
+        assert_eq!(name1, "粉丝团灯牌");
+        assert_eq!(cnt1, Some(1));
+
+        let (name2, cnt2) = clean_gift_name_and_count("{0:user} 送出了 {1:image}小心心 × 10");
+        assert_eq!(name2, "小心心");
+        assert_eq!(cnt2, Some(10));
+
+        let (name3, cnt3) = clean_gift_name_and_count("送出了【图标】嘉年华 x 2");
+        assert_eq!(name3, "嘉年华");
+        assert_eq!(cnt3, Some(2));
+
+        let (name4, cnt4) = clean_gift_name_and_count("大啤酒");
+        assert_eq!(name4, "大啤酒");
+        assert_eq!(cnt4, None);
+    }
+
+    #[test]
+    fn test_fansclub_light_card_parsing() {
+        // 测试粉丝团灯牌(gift_id=3334)，省略GiftStruct时的解析与1抖币(10分)单价保底
+        let gift = GiftMessage {
+            common: None,
+            gift_id: 3334,
+            fan_ticket_count: 0,
+            group_count: 1,
+            repeat_count: 1,
+            combo_count: 1,
+            user: Some(User {
+                id: 889900,
+                nickname: "忠实团员".to_string(),
+            }),
+            to_user: None,
+            gift: None,
+        };
+
+        let response = Response {
+            messages_list: vec![DouyinMessage {
+                method: "WebcastGiftMessage".to_string(),
+                payload: gift.encode_to_vec(),
+                msg_id: 4004,
+            }],
+            cursor: "1".to_string(),
+            fetch_interval: 1000,
+            now: 1700000000,
+            internal_ext: "".to_string(),
+            fetch_type: 0,
+            need_ack: false,
+            push_server: "".to_string(),
+        };
+
+        let parsed = parse_douyin_messages("214495728391", &response);
+        assert_eq!(parsed.len(), 1);
+        let msg = &parsed[0];
+        assert_eq!(msg.user.nickname, "忠实团员");
+        match &msg.payload {
+            LiveMessagePayload::Gift {
+                gift_name,
+                count,
+                price_cents,
+                ..
+            } => {
+                assert_eq!(gift_name, "粉丝团灯牌");
+                assert_eq!(*count, 1);
+                assert_eq!(*price_cents, 10); // 10分 = 1抖币
+            }
+            _ => panic!("Expected Gift payload for fans club light card"),
+        }
+    }
+
+    #[test]
+    fn test_parse_douyin_fansclub_message() {
+        let fans_msg = FansclubMessage {
+            common: None,
+            type_code: 1,
+            content: "恭喜 铁杆粉丝 加入粉丝团成为第88名“黑鱼”".to_string(),
+            user: Some(User {
+                id: 123456,
+                nickname: "铁杆粉丝".to_string(),
+            }),
+        };
+
+        let response = Response {
+            messages_list: vec![DouyinMessage {
+                method: "WebcastFansclubMessage".to_string(),
+                payload: fans_msg.encode_to_vec(),
+                msg_id: 5005,
+            }],
+            cursor: "1".to_string(),
+            fetch_interval: 1000,
+            now: 1700000000,
+            internal_ext: "".to_string(),
+            fetch_type: 0,
+            need_ack: false,
+            push_server: "".to_string(),
+        };
+
+        let parsed = parse_douyin_messages("214495728391", &response);
+        assert_eq!(parsed.len(), 1);
+        let msg = &parsed[0];
+        assert_eq!(msg.user.nickname, "铁杆粉丝");
+        match &msg.payload {
+            LiveMessagePayload::Gift {
+                gift_name,
+                count,
+                price_cents,
+                ..
+            } => {
+                assert_eq!(gift_name, "加入粉丝团");
+                assert_eq!(*count, 1);
+                assert_eq!(*price_cents, 10);
+            }
+            _ => panic!("Expected Gift payload for fans club join message"),
         }
     }
 }
