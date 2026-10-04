@@ -1,6 +1,7 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { LiveMessage } from "../../types";
 import { TrashIcon } from "../Icons";
+import { formatCount, formatCurrency } from "../../utils";
 
 interface LiveChatPanelProps {
   messages: LiveMessage[];
@@ -8,6 +9,20 @@ interface LiveChatPanelProps {
   setFilter: (filter: "all" | "chat" | "gift" | "other") => void;
   onClear: () => void;
   chatListEndRef: React.RefObject<HTMLDivElement | null>;
+  totalLikes?: number;
+}
+
+interface GiftSummaryItem {
+  name: string;
+  count: number;
+  totalRmb: number;
+}
+
+interface GifterItem {
+  userId: string;
+  nickname: string;
+  totalRmb: number;
+  giftCount: number;
 }
 
 export const LiveChatPanel: React.FC<LiveChatPanelProps> = ({
@@ -16,17 +31,124 @@ export const LiveChatPanel: React.FC<LiveChatPanelProps> = ({
   setFilter,
   onClear,
   chatListEndRef,
+  totalLikes = 0,
 }) => {
+  // 全面统计礼物数据与互动概览
+  const stats = useMemo(() => {
+    let chatCount = 0;
+    let giftCount = 0;
+    let giftTotalRmb = 0;
+
+    const giftMap = new Map<string, { count: number; totalRmb: number }>();
+    const gifterMap = new Map<string, GifterItem>();
+
+    for (const m of messages) {
+      if (m.payload.type === "chat") {
+        chatCount++;
+      } else if (m.payload.type === "superchat") {
+        chatCount++;
+        const rmb = m.payload.price_rmb || 0;
+        giftCount++;
+        giftTotalRmb += rmb;
+
+        // SC 计入礼物榜
+        const cur = giftMap.get("醒目留言") || { count: 0, totalRmb: 0 };
+        cur.count++;
+        cur.totalRmb += rmb;
+        giftMap.set("醒目留言", cur);
+
+        // 送礼用户榜
+        const uid = m.user.user_id || m.user.nickname;
+        const gifter = gifterMap.get(uid) || {
+          userId: uid,
+          nickname: m.user.nickname,
+          totalRmb: 0,
+          giftCount: 0,
+        };
+        gifter.totalRmb += rmb;
+        gifter.giftCount++;
+        gifterMap.set(uid, gifter);
+      } else if (m.payload.type === "gift") {
+        const count = m.payload.count || 1;
+        const rmb = ((m.payload.price_cents || 0) * count) / 100;
+        giftCount += count;
+        giftTotalRmb += rmb;
+
+        // 礼物名称汇总
+        const name = m.payload.gift_name || "未知礼物";
+        const cur = giftMap.get(name) || { count: 0, totalRmb: 0 };
+        cur.count += count;
+        cur.totalRmb += rmb;
+        giftMap.set(name, cur);
+
+        // 送礼用户榜
+        const uid = m.user.user_id || m.user.nickname;
+        const gifter = gifterMap.get(uid) || {
+          userId: uid,
+          nickname: m.user.nickname,
+          totalRmb: 0,
+          giftCount: 0,
+        };
+        gifter.totalRmb += rmb;
+        gifter.giftCount += count;
+        gifterMap.set(uid, gifter);
+      }
+    }
+
+    // 礼物种类排行榜
+    const giftBreakdown: GiftSummaryItem[] = Array.from(giftMap.entries())
+      .map(([name, data]) => ({ name, count: data.count, totalRmb: data.totalRmb }))
+      .sort((a, b) => b.totalRmb - a.totalRmb || b.count - a.count);
+
+    // 送礼观众榜单
+    const topGifters: GifterItem[] = Array.from(gifterMap.values())
+      .sort((a, b) => b.totalRmb - a.totalRmb || b.giftCount - a.giftCount)
+      .slice(0, 5);
+
+    return {
+      chatCount,
+      giftCount,
+      giftTotalRmb,
+      giftBreakdown,
+      topGifters,
+    };
+  }, [messages]);
+
   return (
     <div className="player-chat-panel">
       <div className="chat-panel-header">
         <div className="header-left">
-          <span className="chat-title">实时弹幕与互动</span>
+          <span className="chat-title">实时互动与弹幕</span>
           <span className="chat-count">({messages.length})</span>
         </div>
         <button className="icon-btn" onClick={onClear} title="清空聊天记录">
           <TrashIcon size={14} />
         </button>
+      </div>
+
+      {/* 实时统计状态栏 */}
+      <div className="player-chat-stats-bar">
+        <div className="chat-stat-item">
+          <span className="label">弹幕:</span>
+          <span className="val">{stats.chatCount}</span>
+        </div>
+        <div
+          className="chat-stat-item"
+          title={`累计礼物: ${stats.giftCount} 件，估值: ${formatCurrency(stats.giftTotalRmb)}`}
+        >
+          <span className="label">礼物:</span>
+          <span className="val gift">
+            {stats.giftCount}
+            {stats.giftTotalRmb > 0 && ` (¥${stats.giftTotalRmb.toFixed(0)})`}
+          </span>
+        </div>
+        <div
+          className="chat-stat-item"
+          title={`当前直播间累计总点赞: ${totalLikes.toLocaleString()} 次`}
+        >
+          <span className="label">总点赞:</span>
+          <span className="val like">{formatCount(totalLikes)}</span>
+        </div>
       </div>
 
       {/* 过滤切换标签 */}
@@ -42,27 +164,59 @@ export const LiveChatPanel: React.FC<LiveChatPanelProps> = ({
           className={`tab-btn ${filter === "all" ? "active" : ""}`}
           onClick={() => setFilter("all")}
         >
-          全部
+          全部 ({messages.length})
         </button>
         <button
           className={`tab-btn ${filter === "chat" ? "active" : ""}`}
           onClick={() => setFilter("chat")}
         >
-          弹幕
+          弹幕 ({stats.chatCount})
         </button>
         <button
           className={`tab-btn ${filter === "gift" ? "active" : ""}`}
           onClick={() => setFilter("gift")}
         >
-          礼物
+          礼物 ({stats.giftCount})
         </button>
         <button
           className={`tab-btn ${filter === "other" ? "active" : ""}`}
           onClick={() => setFilter("other")}
         >
-          互动
+          进场/互动
         </button>
       </div>
+
+      {/* 礼物专区统计概览卡片 */}
+      {filter === "gift" && (
+        <div className="gift-summary-banner player-mode">
+          <div className="gift-summary-row">
+            <div className="summary-item">
+              <span className="summary-label">礼物数</span>
+              <span className="summary-num">{stats.giftCount} 件</span>
+            </div>
+            <div className="summary-item">
+              <span className="summary-label">预估收益</span>
+              <span className="summary-num highlight">{formatCurrency(stats.giftTotalRmb)}</span>
+            </div>
+            <div className="summary-item">
+              <span className="summary-label">种类</span>
+              <span className="summary-num">{stats.giftBreakdown.length} 种</span>
+            </div>
+          </div>
+
+          {stats.giftBreakdown.length > 0 && (
+            <div className="gift-tags-scroll">
+              {stats.giftBreakdown.slice(0, 5).map((g) => (
+                <span key={g.name} className="gift-tag-badge">
+                  <span className="tag-name">{g.name}</span>
+                  <span className="tag-count">x{g.count}</span>
+                  {g.totalRmb > 0 && <span className="tag-rmb">¥{g.totalRmb.toFixed(1)}</span>}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 消息滚动列表 */}
       <div className="chat-message-stream">
@@ -100,6 +254,7 @@ export const LiveChatPanel: React.FC<LiveChatPanelProps> = ({
               }
 
               if (m.payload.type === "gift") {
+                const totalRmb = ((m.payload.price_cents || 0) * (m.payload.count || 1)) / 100;
                 return (
                   <div key={m.id} className="danmaku-msg-item gift-item">
                     <span className="msg-time">{time}</span>
@@ -107,6 +262,9 @@ export const LiveChatPanel: React.FC<LiveChatPanelProps> = ({
                     <span className="gift-text">
                       送出 <span className="gift-name">{m.payload.gift_name}</span> x
                       <span className="gift-count">{m.payload.count}</span>
+                      {totalRmb > 0 && (
+                        <span className="gift-value-tag"> (¥{totalRmb.toFixed(1)})</span>
+                      )}
                     </span>
                   </div>
                 );
@@ -126,8 +284,11 @@ export const LiveChatPanel: React.FC<LiveChatPanelProps> = ({
                 return (
                   <div key={m.id} className="danmaku-msg-item like-item">
                     <span className="msg-time">{time}</span>
-                    <span className="user-nickname">{m.user.nickname}</span>
-                    <span className="like-text">为主播点赞了</span>
+                    <span className="user-nickname">{m.user.nickname || "观众"}</span>
+                    <span className="like-text">
+                      为主播点赞了
+                      {m.payload.count && m.payload.count > 1 ? ` x${m.payload.count}` : ""}
+                    </span>
                   </div>
                 );
               }

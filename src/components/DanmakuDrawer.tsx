@@ -3,12 +3,26 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { RoomConfig, LiveMessage } from "../types";
 import { CloseIcon, TrashIcon } from "./Icons";
+import { formatCount, formatCurrency } from "../utils";
 
 interface DanmakuDrawerProps {
   room: RoomConfig;
   isOpen: boolean;
   isRecording: boolean;
   onClose: () => void;
+}
+
+interface GiftSummaryItem {
+  name: string;
+  count: number;
+  totalRmb: number;
+}
+
+interface GifterItem {
+  userId: string;
+  nickname: string;
+  totalRmb: number;
+  giftCount: number;
 }
 
 export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
@@ -22,6 +36,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
   const [status, setStatus] = useState<'connecting' | 'connected' | 'stopped'>('connecting');
   const [isHovered, setIsHovered] = useState(false);
   const [hasNewMessagesBelow, setHasNewMessagesBelow] = useState(false);
+  const [totalLikes, setTotalLikes] = useState<number>(0);
 
   const listEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -42,6 +57,16 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
           const msg = event.payload;
           if (msg.room_id === room.room_id) {
             setStatus('connected');
+
+            // 维护当前直播间累计总点赞数
+            if (msg.payload.type === 'like') {
+              if (msg.payload.total && msg.payload.total > 0) {
+                setTotalLikes((prev) => Math.max(prev, msg.payload.total!));
+              } else {
+                setTotalLikes((prev) => prev + (msg.payload.count || 1));
+              }
+            }
+
             setMessages((prev) => {
               const next = [...prev, msg];
               if (next.length > 500) {
@@ -107,19 +132,85 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
     return messages.filter(m => m.payload.type === 'enter' || m.payload.type === 'like');
   }, [messages, filter]);
 
-  // 统计数据
+  // 全面礼物统计与互动数据分析
   const stats = useMemo(() => {
     let chatCount = 0;
     let giftCount = 0;
-    let likeCount = 0;
+    let giftTotalRmb = 0;
+
+    const giftMap = new Map<string, { count: number; totalRmb: number }>();
+    const gifterMap = new Map<string, GifterItem>();
 
     for (const m of messages) {
-      if (m.payload.type === 'chat' || m.payload.type === 'superchat') chatCount++;
-      else if (m.payload.type === 'gift') giftCount += m.payload.count || 1;
-      else if (m.payload.type === 'like') likeCount += m.payload.count || 1;
+      if (m.payload.type === 'chat') {
+        chatCount++;
+      } else if (m.payload.type === 'superchat') {
+        chatCount++;
+        const rmb = m.payload.price_rmb || 0;
+        giftCount++;
+        giftTotalRmb += rmb;
+
+        // SC 计入礼物榜
+        const cur = giftMap.get("醒目留言") || { count: 0, totalRmb: 0 };
+        cur.count++;
+        cur.totalRmb += rmb;
+        giftMap.set("醒目留言", cur);
+
+        // 送礼用户榜
+        const uid = m.user.user_id || m.user.nickname;
+        const gifter = gifterMap.get(uid) || {
+          userId: uid,
+          nickname: m.user.nickname,
+          totalRmb: 0,
+          giftCount: 0,
+        };
+        gifter.totalRmb += rmb;
+        gifter.giftCount++;
+        gifterMap.set(uid, gifter);
+      } else if (m.payload.type === 'gift') {
+        const count = m.payload.count || 1;
+        const rmb = ((m.payload.price_cents || 0) * count) / 100;
+        giftCount += count;
+        giftTotalRmb += rmb;
+
+        // 礼物名称汇总
+        const name = m.payload.gift_name || "未知礼物";
+        const cur = giftMap.get(name) || { count: 0, totalRmb: 0 };
+        cur.count += count;
+        cur.totalRmb += rmb;
+        giftMap.set(name, cur);
+
+        // 送礼用户榜
+        const uid = m.user.user_id || m.user.nickname;
+        const gifter = gifterMap.get(uid) || {
+          userId: uid,
+          nickname: m.user.nickname,
+          totalRmb: 0,
+          giftCount: 0,
+        };
+        gifter.totalRmb += rmb;
+        gifter.giftCount += count;
+        gifterMap.set(uid, gifter);
+      }
     }
 
-    return { chatCount, giftCount, likeCount };
+    // 礼物排行榜
+    const giftBreakdown: GiftSummaryItem[] = Array.from(giftMap.entries())
+      .map(([name, data]) => ({ name, count: data.count, totalRmb: data.totalRmb }))
+      .sort((a, b) => b.totalRmb - a.totalRmb || b.count - a.count);
+
+    // 送礼观众榜单
+    const topGifters: GifterItem[] = Array.from(gifterMap.values())
+      .sort((a, b) => b.totalRmb - a.totalRmb || b.giftCount - a.giftCount)
+      .slice(0, 5);
+
+    return {
+      chatCount,
+      giftCount,
+      giftTotalRmb,
+      giftBreakdown,
+      topGifters,
+    };
   }, [messages]);
 
   if (!isOpen) return null;
@@ -144,7 +235,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
           <div className="danmaku-header-right">
             <button
               className="icon-btn"
-              title="清屏"
+              title="清空聊天记录（保留点赞与礼物统计）"
               onClick={() => setMessages([])}
             >
               <TrashIcon />
@@ -161,13 +252,18 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
             <span className="stat-label">弹幕</span>
             <span className="stat-val">{stats.chatCount}</span>
           </div>
-          <div className="stat-pill">
+          <div className="stat-pill" title={`累计礼物: ${stats.giftCount} 件，估值: ${formatCurrency(stats.giftTotalRmb)}`}>
             <span className="stat-label">礼物</span>
-            <span className="stat-val gift">{stats.giftCount}</span>
+            <span className="stat-val gift">
+              {stats.giftCount}
+              {stats.giftTotalRmb > 0 && (
+                <span className="stat-sub-val"> ({formatCurrency(stats.giftTotalRmb)})</span>
+              )}
+            </span>
           </div>
-          <div className="stat-pill">
-            <span className="stat-label">点赞</span>
-            <span className="stat-val like">{stats.likeCount}</span>
+          <div className="stat-pill" title={`当前直播间累计总点赞: ${totalLikes.toLocaleString()} 次`}>
+            <span className="stat-label">总点赞</span>
+            <span className="stat-val like">{formatCount(totalLikes)}</span>
           </div>
         </div>
 
@@ -189,7 +285,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
             className={`tab-btn ${filter === 'gift' ? 'active' : ''}`}
             onClick={() => setFilter('gift')}
           >
-            礼物
+            礼物 ({stats.giftCount})
           </button>
           <button
             className={`tab-btn ${filter === 'other' ? 'active' : ''}`}
@@ -198,6 +294,50 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
             进场/互动
           </button>
         </div>
+
+        {/* 礼物专区统计概览卡片 (仅在切换到礼物 Tab 时展示) */}
+        {filter === 'gift' && (
+          <div className="gift-summary-banner">
+            <div className="gift-summary-row">
+              <div className="summary-item">
+                <span className="summary-label">礼物总数</span>
+                <span className="summary-num">{stats.giftCount} 件</span>
+              </div>
+              <div className="summary-item">
+                <span className="summary-label">预估收益</span>
+                <span className="summary-num highlight">{formatCurrency(stats.giftTotalRmb)}</span>
+              </div>
+              <div className="summary-item">
+                <span className="summary-label">礼物种类</span>
+                <span className="summary-num">{stats.giftBreakdown.length} 种</span>
+              </div>
+            </div>
+
+            {/* 礼物热门排行胶囊 */}
+            {stats.giftBreakdown.length > 0 && (
+              <div className="gift-tags-scroll">
+                {stats.giftBreakdown.slice(0, 6).map((g) => (
+                  <span key={g.name} className="gift-tag-badge">
+                    <span className="tag-name">{g.name}</span>
+                    <span className="tag-count">x{g.count}</span>
+                    {g.totalRmb > 0 && (
+                      <span className="tag-rmb">¥{g.totalRmb.toFixed(1)}</span>
+                    )}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {/* 榜一送礼观众 */}
+            {stats.topGifters.length > 0 && stats.topGifters[0].totalRmb > 0 && (
+              <div className="gift-top-user">
+                <span className="crown-icon">👑 贡献榜首:</span>
+                <span className="top-name">{stats.topGifters[0].nickname}</span>
+                <span className="top-val">{formatCurrency(stats.topGifters[0].totalRmb)}</span>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* 消息滚动流 */}
         <div
@@ -231,6 +371,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
               }
 
               if (msg.payload.type === 'gift') {
+                const totalRmb = ((msg.payload.price_cents || 0) * (msg.payload.count || 1)) / 100;
                 return (
                   <div key={msg.id} className="danmaku-msg-item gift-item">
                     <span className="msg-time">{timeStr}</span>
@@ -238,6 +379,9 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                     <span className="gift-text">
                       送出 <span className="gift-name">{msg.payload.gift_name}</span> x
                       <span className="gift-count">{msg.payload.count}</span>
+                      {totalRmb > 0 && (
+                        <span className="gift-value-tag"> (¥{totalRmb.toFixed(1)})</span>
+                      )}
                     </span>
                   </div>
                 );
@@ -257,8 +401,11 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                 return (
                   <div key={msg.id} className="danmaku-msg-item like-item">
                     <span className="msg-time">{timeStr}</span>
-                    <span className="user-nickname">{msg.user.nickname}</span>
-                    <span className="like-text">为主播点赞了</span>
+                    <span className="user-nickname">{msg.user.nickname || "观众"}</span>
+                    <span className="like-text">
+                      为主播点赞了
+                      {msg.payload.count && msg.payload.count > 1 ? ` x${msg.payload.count}` : ''}
+                    </span>
                   </div>
                 );
               }

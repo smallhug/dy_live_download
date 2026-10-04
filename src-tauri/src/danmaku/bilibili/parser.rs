@@ -179,6 +179,29 @@ pub fn parse_bilibili_message(room_id: &str, raw_json: &[u8]) -> Option<LiveMess
         });
     }
 
+    if cmd == "LIKE_INFO_V3_UPDATE" {
+        let data = json_val.get("data")?;
+        let click_count = data.get("click_count").and_then(|c| c.as_u64())?;
+
+        return Some(LiveMessage {
+            id: format!("bili_like_update_{}_{}", room_id, now_ms),
+            platform: "bilibili".to_string(),
+            room_id: room_id.to_string(),
+            timestamp_ms: now_ms,
+            user: LiveMessageUser {
+                user_id: "".to_string(),
+                nickname: "系统".to_string(),
+                avatar_url: None,
+                badge_name: None,
+                badge_level: None,
+            },
+            payload: LiveMessagePayload::Like {
+                count: 0,
+                total: Some(click_count),
+            },
+        });
+    }
+
     None
 }
 
@@ -247,6 +270,24 @@ mod tests {
                 assert_eq!(combo_count, Some(99));
             }
             _ => panic!("Expected Gift payload"),
+        }
+    }
+
+    #[test]
+    fn test_parse_like_update() {
+        let json_data = r#"{
+            "cmd": "LIKE_INFO_V3_UPDATE",
+            "data": {
+                "click_count": 884812
+            }
+        }"#;
+
+        let parsed = parse_bilibili_message("987654", json_data.as_bytes()).expect("failed to parse LIKE_INFO_V3_UPDATE");
+        match parsed.payload {
+            LiveMessagePayload::Like { total, .. } => {
+                assert_eq!(total, Some(884812));
+            }
+            _ => panic!("Expected Like payload with total"),
         }
     }
 }

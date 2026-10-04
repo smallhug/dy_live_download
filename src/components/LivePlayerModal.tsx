@@ -72,6 +72,7 @@ export const LivePlayerModal: React.FC<LivePlayerModalProps> = ({
   // 聊天消息与分类
   const [messages, setMessages] = useState<LiveMessage[]>([]);
   const [filter, setFilter] = useState<"all" | "chat" | "gift" | "other">("all");
+  const [totalLikes, setTotalLikes] = useState<number>(0);
   const emittedIdsRef = useRef<Set<string>>(new Set());
 
   // 1. 初始化 Canvas 弹幕引擎
@@ -116,6 +117,15 @@ export const LivePlayerModal: React.FC<LivePlayerModalProps> = ({
           if (!isMounted) return;
           const msg = event.payload;
           if (msg.room_id === room.room_id) {
+            // 维护当前直播间总点赞数
+            if (msg.payload.type === "like") {
+              if (msg.payload.total && msg.payload.total > 0) {
+                setTotalLikes((prev) => Math.max(prev, msg.payload.total!));
+              } else {
+                setTotalLikes((prev) => prev + (msg.payload.count || 1));
+              }
+            }
+
             // 右侧聊天列表（严格按消息唯一 ID 去重）
             setMessages((prev) => {
               if (prev.some((item) => item.id === msg.id)) {
@@ -335,6 +345,7 @@ export const LivePlayerModal: React.FC<LivePlayerModalProps> = ({
           setFilter={setFilter}
           onClear={() => setMessages([])}
           chatListEndRef={chatListEndRef}
+          totalLikes={totalLikes}
         />
       </div>
     </div>
