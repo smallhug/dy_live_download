@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { RoomConfig } from "../types";
-import { SettingsIcon, MovieIcon, TimerIcon, BroadcastIcon, CameraIcon, TipIcon, CheckIcon } from "./Icons";
+import { SettingsIcon, MovieIcon, TimerIcon, BroadcastIcon, CameraIcon, TipIcon, CheckIcon, ChatIcon, FileIcon } from "./Icons";
 
 interface RoomSettingsModalProps {
   isOpen: boolean;
@@ -18,7 +18,9 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   const [quality, setQuality] = useState("原画");
   const [segmentMins, setSegmentMins] = useState(0);
   const [isMonitoring, setIsMonitoring] = useState(false);
-  const [autoRecord, setAutoRecord] = useState(true);
+  const [autoRecord, setAutoRecord] = useState(false);
+  const [recordDanmaku, setRecordDanmaku] = useState(true);
+  const [danmakuFormat, setDanmakuFormat] = useState<'xml' | 'jsonl'>('xml');
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
@@ -32,7 +34,9 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
       setQuality(mapped);
       setSegmentMins(room.segment_duration_mins || 0);
       setIsMonitoring(room.is_monitoring ?? false);
-      setAutoRecord(room.auto_record ?? true);
+      setAutoRecord(room.auto_record ?? false);
+      setRecordDanmaku(room.record_danmaku ?? true);
+      setDanmakuFormat((room.danmaku_format as 'xml' | 'jsonl') || 'xml');
     }
   }, [isOpen, room]);
 
@@ -48,6 +52,8 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
         segment_duration_mins: segmentMins,
         is_monitoring: isMonitoring,
         auto_record: autoRecord,
+        record_danmaku: recordDanmaku,
+        danmaku_format: danmakuFormat,
       });
       onClose();
     } catch (err) {
@@ -182,6 +188,57 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
               >
                 <option value="true">开启录制</option>
                 <option value="false">关闭录制</option>
+              </select>
+            </div>
+          </div>
+
+          {/* 弹幕录制 & 格式设置 - 并排 */}
+          <div style={{ display: "flex", gap: "12px", marginTop: "4px" }}>
+            <div className="form-group" style={{ flex: 1 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "4px", marginBottom: "6px", fontWeight: "600", fontSize: "12.5px", color: "#334155" }}>
+                <ChatIcon size={13} /> 录制弹幕
+              </label>
+              <select
+                value={recordDanmaku ? "true" : "false"}
+                onChange={(e) => setRecordDanmaku(e.target.value === "true")}
+                disabled={isSaving}
+                style={{
+                  width: "100%",
+                  padding: "6px 8px",
+                  fontSize: "13px",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: "6px",
+                  backgroundColor: "#ffffff",
+                  color: "#1e293b",
+                  outline: "none",
+                }}
+              >
+                <option value="true">同步录制</option>
+                <option value="false">不保存弹幕</option>
+              </select>
+            </div>
+            <div className="form-group" style={{ flex: 1 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "4px", marginBottom: "6px", fontWeight: "600", fontSize: "12.5px", color: "#334155" }}>
+                <FileIcon size={13} /> 弹幕格式
+              </label>
+              <select
+                value={danmakuFormat}
+                onChange={(e) => setDanmakuFormat(e.target.value as 'xml' | 'jsonl')}
+                disabled={isSaving || !recordDanmaku}
+                style={{
+                  width: "100%",
+                  padding: "6px 8px",
+                  fontSize: "13px",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: "6px",
+                  backgroundColor: recordDanmaku ? "#ffffff" : "#f1f5f9",
+                  color: recordDanmaku ? "#1e293b" : "#94a3b8",
+                  cursor: recordDanmaku ? "pointer" : "not-allowed",
+                  outline: "none",
+                }}
+              >
+                <option value="xml">XML (播放器外挂)</option>
+                <option value="jsonl">JSONL (结构化数据)</option>
               </select>
             </div>
           </div>

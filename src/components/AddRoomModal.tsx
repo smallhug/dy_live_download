@@ -26,23 +26,47 @@ export const AddRoomModal: React.FC<AddRoomModalProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const cleanId = url.trim();
-    if (!cleanId) return;
+    let cleanInput = url.trim();
+    if (!cleanInput) return;
 
-    if (!/^\d+$/.test(cleanId)) {
-      setError("输入格式不正确，仅支持输入直播间的纯数字 ID，不支持输入链接。");
-      return;
+    let targetPlatform = platform;
+    let targetId = cleanInput;
+
+    // 智能识别：如果用户粘贴了完整的直播间 URL，自动提取数字 ID 及识别平台
+    if (cleanInput.includes("douyin.com")) {
+      targetPlatform = "douyin";
+      setPlatform("douyin");
+      // 兼容匹配: live.douyin.com/884280331889 或 douyin.com/root/live/884280331889
+      const match = cleanInput.match(/(?:live|root\/live)\/(\d+)/);
+      if (match) targetId = match[1];
+    } else if (cleanInput.includes("bilibili.com")) {
+      targetPlatform = "bilibili";
+      setPlatform("bilibili");
+      const match = cleanInput.match(/(?:live\.bilibili\.com\/|bilibili\.com\/live\/)(\d+)/);
+      if (match) targetId = match[1];
+    }
+
+    // 若依然包含链接或非数字字符，尝试正则提取连续数字串
+    if (!/^\d+$/.test(targetId)) {
+      const match = targetId.match(/(\d{4,})/);
+      if (match) {
+        targetId = match[1];
+      } else {
+        setError("输入格式不正确，请提供直播间的纯数字 ID 或有效的直播间网页链接。");
+        return;
+      }
     }
 
     setIsLoading(true);
     setError(null);
     try {
       // 默认参数：默认开启监控 (true)，默认原画画质，默认分段 30 分钟，传入所选平台
-      await onAdd(cleanId, true, "origin", 30, platform);
+      await onAdd(targetId, true, "origin", 30, targetPlatform);
       setUrl("");
       onClose();
     } catch (err: any) {
-      setError(err.toString() || "添加直播间失败，请确认数字 ID 是否正确及网络状态。");
+      const errMsg = typeof err === "string" ? err : err?.message || JSON.stringify(err);
+      setError(errMsg || "添加直播间失败，请确认数字 ID 是否正确及网络状态。");
     } finally {
       setIsLoading(false);
     }

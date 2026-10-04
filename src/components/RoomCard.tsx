@@ -1,11 +1,13 @@
 import React from "react";
 import { RoomConfig, RecordProgress } from "../types";
-import { 
-  RefreshIcon, 
-  SettingsIcon, 
-  TrashIcon, 
-  LoadingIcon, 
-  TimerIcon
+import {
+  RefreshIcon,
+  SettingsIcon,
+  TrashIcon,
+  LoadingIcon,
+  TimerIcon,
+  ChatIcon,
+  TvIcon
 } from "./Icons";
 
 interface RoomCardProps {
@@ -21,6 +23,8 @@ interface RoomCardProps {
   onStopRecord: () => void;
   onDelete: () => void;
   onSettings: () => void;
+  onOpenDanmaku?: () => void;
+  onWatchLive?: () => void;
 }
 
 export const RoomCard: React.FC<RoomCardProps> = React.memo(({
@@ -36,6 +40,8 @@ export const RoomCard: React.FC<RoomCardProps> = React.memo(({
   onStopRecord,
   onDelete,
   onSettings,
+  onOpenDanmaku,
+  onWatchLive,
 }) => {
   const cardClass = [
     "room-card glass-card",
@@ -74,19 +80,49 @@ export const RoomCard: React.FC<RoomCardProps> = React.memo(({
           <span className="room-id">ID: {room.room_id}</span>
         </div>
         <div className="card-header-right" style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-          <button 
-            className="icon-btn" 
-            onClick={onCheckStatus} 
+          <button
+            className="icon-btn"
+            onClick={onCheckStatus}
             disabled={isChecking || isRecording}
             title="检测主播开播状态"
             style={{ width: "30px", height: "30px", borderRadius: "6px", display: "inline-flex", alignItems: "center", justifyContent: "center" }}
           >
             {isChecking ? <LoadingIcon size={16} /> : <RefreshIcon size={16} />}
           </button>
-          
-          <button 
-            className="icon-btn" 
-            onClick={onSettings} 
+
+          <button
+            className={`icon-btn ${isLive ? "watch-live-active" : ""}`}
+            onClick={onWatchLive}
+            disabled={!isLive}
+            title={isLive ? "观看直播与弹幕" : "主播未开播，无法观看"}
+            style={{
+              width: "30px",
+              height: "30px",
+              borderRadius: "6px",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: isLive ? "#2563eb" : "#94a3b8",
+              backgroundColor: isLive ? "#eff6ff" : undefined,
+              border: isLive ? "1px solid #bfdbfe" : undefined,
+              cursor: isLive ? "pointer" : "not-allowed",
+            }}
+          >
+            <TvIcon size={16} />
+          </button>
+
+          <button
+            className="icon-btn"
+            onClick={onOpenDanmaku}
+            title="查看直播间弹幕与互动"
+            style={{ width: "30px", height: "30px", borderRadius: "6px", display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+          >
+            <ChatIcon size={16} />
+          </button>
+
+          <button
+            className="icon-btn"
+            onClick={onSettings}
             title="高级参数设置"
             style={{ width: "30px", height: "30px", borderRadius: "6px", display: "inline-flex", alignItems: "center", justifyContent: "center" }}
           >

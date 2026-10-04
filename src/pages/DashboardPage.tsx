@@ -1,6 +1,7 @@
-import React from "react";
+import React, { useState } from "react";
 import { AppConfig, RoomConfig, RecordProgress } from "../types";
 import { RoomCard } from "../components/RoomCard";
+import { DanmakuDrawer } from "../components/DanmakuDrawer";
 import { TvIcon } from "../components/Icons";
 
 interface DashboardPageProps {
@@ -17,6 +18,7 @@ interface DashboardPageProps {
   onStopRecord: (roomId: string) => void;
   onDeleteRoom: (roomId: string) => void;
   onOpenSettings: (room: RoomConfig) => void;
+  onWatchLive: (room: RoomConfig) => void;
 }
 
 const DashboardPage: React.FC<DashboardPageProps> = ({
@@ -33,7 +35,10 @@ const DashboardPage: React.FC<DashboardPageProps> = ({
   onStopRecord,
   onDeleteRoom,
   onOpenSettings,
+  onWatchLive,
 }) => {
+  const [selectedDanmakuRoom, setSelectedDanmakuRoom] = useState<RoomConfig | null>(null);
+
   if (!config || !config.rooms || config.rooms.length === 0) {
     return (
       <div className="tab-page-content" style={{ display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
@@ -72,10 +77,21 @@ const DashboardPage: React.FC<DashboardPageProps> = ({
               onStopRecord={() => onStopRecord(room.room_id)}
               onDelete={() => onDeleteRoom(room.room_id)}
               onSettings={() => onOpenSettings(room)}
+              onOpenDanmaku={() => setSelectedDanmakuRoom(room)}
+              onWatchLive={() => onWatchLive(room)}
             />
           );
         })}
       </div>
+
+      {selectedDanmakuRoom && (
+        <DanmakuDrawer
+          room={selectedDanmakuRoom}
+          isOpen={!!selectedDanmakuRoom}
+          isRecording={activeTasks.includes(selectedDanmakuRoom.room_id)}
+          onClose={() => setSelectedDanmakuRoom(null)}
+        />
+      )}
     </div>
   );
 };

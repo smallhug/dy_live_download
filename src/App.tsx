@@ -11,11 +11,11 @@ import CredentialsPage from "./pages/CredentialsPage";
 import ConverterPage from "./pages/ConverterPage";
 import SettingsPage from "./pages/SettingsPage";
 import { OnboardingGuide } from "./components/OnboardingGuide";
-import { openUrl } from "@tauri-apps/plugin-opener";
-import { 
-  RefreshIcon, 
-  SettingsIcon, 
-  TvIcon, 
+import { LivePlayerModal } from "./components/LivePlayerModal";
+import {
+  RefreshIcon,
+  SettingsIcon,
+  TvIcon,
   PlusIcon,
   KeyIcon,
 } from "./components/Icons";
@@ -99,6 +99,7 @@ function App() {
   const [isAddRoomOpen, setIsAddRoomOpen] = useState(false);
   const [isRoomSettingsOpen, setIsRoomSettingsOpen] = useState(false);
   const [selectedRoomForSettings, setSelectedRoomForSettings] = useState<RoomConfig | null>(null);
+  const [playbackRoom, setPlaybackRoom] = useState<RoomConfig | null>(null);
 
   // ── 自定义对话框状态 ──────────────────────────────────────────
   const [dialogState, setDialogState] = useState<(DialogOptions & { resolve: (v: boolean) => void }) | null>(null);
@@ -339,6 +340,8 @@ function App() {
         silent_start: currentConfig.global.silent_start,
         close_to_tray: currentConfig.global.close_to_tray,
         has_seen_guide: currentConfig.global.has_seen_guide,
+        record_danmaku: currentConfig.global.record_danmaku ?? true,
+        danmaku_format: currentConfig.global.danmaku_format || 'xml',
         ...patch
       };
       await invoke("update_global_config", {
@@ -352,6 +355,8 @@ function App() {
         silentStart: fullConfig.silent_start,
         closeToTray: fullConfig.close_to_tray,
         hasSeenGuide: fullConfig.has_seen_guide,
+        recordDanmaku: fullConfig.record_danmaku,
+        danmakuFormat: fullConfig.danmaku_format,
       });
       await fetchConfig();
     } catch (err) {
@@ -467,6 +472,7 @@ function App() {
               onStopRecord={handleStopRecord}
               onDeleteRoom={handleDeleteRoom}
               onOpenSettings={(room) => { setSelectedRoomForSettings(room); setIsRoomSettingsOpen(true); }}
+              onWatchLive={(room) => setPlaybackRoom(room)}
             />
           )}
 
@@ -495,13 +501,22 @@ function App() {
         </main>
 
         {/* 4. 底部 Telemetry Status Bar */}
-        <TelemetryBar 
+        <TelemetryBar
           onlineCount={config?.rooms.filter(r => roomStatuses[r.room_id]?.is_live).length || 0}
           activeRecordCount={activeTasks.length}
         />
       </div>
 
       {/* 5. 原有的主播与卡片设置弹出 modal 层（依然维持高阶 Modal 的精致弹出） */}
+      {playbackRoom && (
+        <LivePlayerModal
+          room={playbackRoom}
+          isOpen={!!playbackRoom}
+          isRecording={activeTasks.includes(playbackRoom.room_id)}
+          onClose={() => setPlaybackRoom(null)}
+        />
+      )}
+
       {isAddRoomOpen && (
         <AddRoomModal
           isOpen={isAddRoomOpen}

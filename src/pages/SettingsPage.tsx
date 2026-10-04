@@ -1,17 +1,19 @@
 import { useState, useEffect } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { AppConfig } from "../types";
-import { FolderIcon, TimerIcon, LoadingIcon, CheckIcon } from "../components/Icons";
+import { FolderIcon, TimerIcon, LoadingIcon, CheckIcon, ChatIcon } from "../components/Icons";
 
 interface SettingsPageProps {
   config: AppConfig | null;
-  onSave: (data: { 
-    save_dir: string; 
-    ffmpeg_path: string; 
+  onSave: (data: {
+    save_dir: string;
+    ffmpeg_path: string;
     monitor_interval_secs: number;
     autostart: boolean;
     silent_start: boolean;
     close_to_tray: boolean;
+    record_danmaku?: boolean;
+    danmaku_format?: 'xml' | 'jsonl';
   }) => Promise<void>;
   showAlert: (message: string, title?: string, kind?: "info" | "error" | "warning") => Promise<boolean>;
 }
@@ -22,6 +24,8 @@ export default function SettingsPage({ config, onSave, showAlert }: SettingsPage
   const [autostart, setAutostart] = useState(false);
   const [silentStart, setSilentStart] = useState(false);
   const [closeToTray, setCloseToTray] = useState(false);
+  const [recordDanmaku, setRecordDanmaku] = useState(true);
+  const [danmakuFormat, setDanmakuFormat] = useState<'xml' | 'jsonl'>('xml');
   const [isSavingSettings, setIsSavingSettings] = useState(false);
 
   useEffect(() => {
@@ -31,6 +35,8 @@ export default function SettingsPage({ config, onSave, showAlert }: SettingsPage
       setAutostart(!!config.global.autostart);
       setSilentStart(!!config.global.silent_start);
       setCloseToTray(!!config.global.close_to_tray);
+      setRecordDanmaku(config.global.record_danmaku ?? true);
+      setDanmakuFormat((config.global.danmaku_format as 'xml' | 'jsonl') || 'xml');
     }
   }, [config]);
 
@@ -67,6 +73,8 @@ export default function SettingsPage({ config, onSave, showAlert }: SettingsPage
         autostart,
         silent_start: silentStart,
         close_to_tray: closeToTray,
+        record_danmaku: recordDanmaku,
+        danmaku_format: danmakuFormat,
       });
       await showAlert("设置保存成功并已立即生效！", "系统设置", "info");
     } catch (err) {
@@ -193,6 +201,65 @@ export default function SettingsPage({ config, onSave, showAlert }: SettingsPage
                 onChange={(e) => setSilentStart(e.target.checked)}
                 style={{ width: "16px", height: "16px", cursor: autostart ? "pointer" : "not-allowed", accentColor: "#2563eb" }}
               />
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: "16px", borderTop: "1px solid #e2e8f0", paddingTop: "20px" }}>
+          <h4 style={{ fontSize: "13.5px", fontWeight: "600", color: "#0f172a", margin: "0 0 4px 0", display: "flex", alignItems: "center", gap: "6px" }}>
+            <ChatIcon size={16} style={{ color: "#64748b" }} /> 默认弹幕与互动保存偏好
+          </h4>
+
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "12px", borderBottom: "1px solid #f1f5f9" }}>
+            <div style={{ flex: 1, paddingRight: "32px" }}>
+              <label htmlFor="recordDanmakuCheckbox" style={{ fontSize: "13px", fontWeight: "500", color: "#1e293b", cursor: "pointer" }}>
+                录制视频时默认同步录制弹幕与礼物
+              </label>
+              <p style={{ fontSize: "11px", color: "#94a3b8", marginTop: "4px", margin: 0, lineHeight: "1.4" }}>
+                启用后，开启录制时将同时捕获直播间的弹幕、礼物、醒目留言等消息并写入同名文件。
+              </p>
+            </div>
+            <div>
+              <input
+                id="recordDanmakuCheckbox"
+                type="checkbox"
+                checked={recordDanmaku}
+                onChange={(e) => setRecordDanmaku(e.target.checked)}
+                style={{ width: "16px", height: "16px", cursor: "pointer", accentColor: "#2563eb" }}
+              />
+            </div>
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "12px", opacity: recordDanmaku ? 1 : 0.5 }}>
+            <div style={{ flex: 1, paddingRight: "32px" }}>
+              <label htmlFor="danmakuFormatSelect" style={{ fontSize: "13px", fontWeight: "500", color: recordDanmaku ? "#1e293b" : "#64748b" }}>
+                默认弹幕文件保存格式
+              </label>
+              <p style={{ fontSize: "11px", color: "#94a3b8", marginTop: "4px", margin: 0, lineHeight: "1.4" }}>
+                XML 格式完美兼容各种播放器及 DanmakuFactory 渲染弹幕字幕；JSONL 格式保存完整的结构化事件流数据。
+              </p>
+            </div>
+            <div style={{ width: "220px" }}>
+              <select
+                id="danmakuFormatSelect"
+                value={danmakuFormat}
+                disabled={!recordDanmaku}
+                onChange={(e) => setDanmakuFormat(e.target.value as 'xml' | 'jsonl')}
+                style={{
+                  width: "100%",
+                  fontSize: "13px",
+                  padding: "6px 10px",
+                  borderRadius: "6px",
+                  border: "1px solid #cbd5e1",
+                  backgroundColor: recordDanmaku ? "#ffffff" : "#f1f5f9",
+                  color: recordDanmaku ? "#1e293b" : "#94a3b8",
+                  cursor: recordDanmaku ? "pointer" : "not-allowed",
+                  outline: "none"
+                }}
+              >
+                <option value="xml">XML (播放器外挂弹幕)</option>
+                <option value="jsonl">JSONL (结构化日志)</option>
+              </select>
             </div>
           </div>
         </div>
