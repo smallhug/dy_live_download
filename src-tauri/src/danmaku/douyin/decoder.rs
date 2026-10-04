@@ -5,7 +5,14 @@ use crate::danmaku::model::{LiveMessage, LiveMessagePayload, LiveMessageUser};
 use chrono::Utc;
 use flate2::read::GzDecoder;
 use prost::Message;
+use regex::Regex;
 use std::io::Read;
+use std::sync::LazyLock;
+
+static RE_GIFT_COUNT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[\s×xX*]\s*(\d+)$").unwrap());
+static RE_FANS_NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"恭喜\s*(.*?)\s*(?:成为|加入)").unwrap());
+static RE_FANS_BADGE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[“「](.*?)[”」]").unwrap());
+static RE_FANS_MEMBER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"第\d+名(.*?)(?:成员|粉丝)").unwrap());
 
 // 常用抖音礼物预设字典（防止在轻量礼物包未携带完整 GiftStruct 时的名称回退）
 pub fn get_douyin_preset_gift_name(gift_id: u64) -> Option<&'static str> {
@@ -29,12 +36,17 @@ pub fn get_douyin_preset_gift_name(gift_id: u64) -> Option<&'static str> {
     }
 }
 
-// 清洗富文本礼物描述字符串（例如 "XXXXX送出了【图片】粉丝团灯牌 × 1" 或 "{0:user} 送出了 {1:image}粉丝团灯牌 × {2:string}"）
+// 清洗富文本礼物描述字符串（例如 "XXXXX送出了【图片】粉丝团灯牌 × 1" 或 "{0:user} 送出了 {1:image}粉丝团灯牌 × {2:string}" 或加团公告）
 pub fn clean_gift_name_and_count(raw: &str) -> (String, Option<u32>) {
     let mut s = raw.trim();
     if let Some(pos) = s.find("送出了") {
         s = &s[pos + "送出了".len()..];
     }
+    // 特殊识别加团公告模板："恭喜 XXX 成为第 N 名 YYY 成员" 或 "加入粉丝团"
+    if s.contains("成为") && s.contains("成员") || s.contains("加入粉丝团") {
+        return ("粉丝团灯牌".to_string(), Some(1));
+    }
+
     // 移除富文本占位符与图片标记
     let cleaned = s
         .replace("{0:user}", "")
@@ -48,8 +60,7 @@ pub fn clean_gift_name_and_count(raw: &str) -> (String, Option<u32>) {
 
     let cleaned_trim = cleaned.trim();
     // 提取结尾的数量乘数，如 "× 1", "x 10", "* 5", "×1"
-    let re_cnt = regex::Regex::new(r"[\s×xX*]\s*(\d+)$").unwrap();
-    if let Some(caps) = re_cnt.captures(cleaned_trim) {
+    if let Some(caps) = RE_GIFT_COUNT.captures(cleaned_trim) {
         let count: u32 = caps[1].parse().unwrap_or(1);
         let name = cleaned_trim[..caps.get(0).unwrap().start()].trim().to_string();
         if !name.is_empty() {
@@ -540,30 +551,44 @@ pub fn parse_douyin_messages(room_id: &str, response: &Response) -> Vec<LiveMess
                 } else {
                     format!("dy_user_{}", msg.msg_id)
                 };
-                let nickname = if !user.nickname.is_empty() {
-                    user.nickname
-                } else {
-                    "粉丝团成员".to_string()
-                };
-
                 let raw_content = if !fans_msg.content.is_empty() {
                     fans_msg.content
                 } else {
                     "加入粉丝团".to_string()
                 };
-                let gift_name = if raw_content.contains("加入粉丝团") {
-                    "加入粉丝团".to_string()
-                } else if raw_content.contains("升级") {
-                    "粉丝团升级".to_string()
-                } else if raw_content.contains("灯牌") {
-                    "粉丝团灯牌".to_string()
+
+                let nickname = if !user.nickname.is_empty() {
+                    user.nickname
                 } else {
-                    let (cleaned, _) = clean_gift_name_and_count(&raw_content);
-                    if cleaned.is_empty() {
-                        "加入粉丝团".to_string()
+                    // 从内容中提取用户名，例如 "恭喜 嗜眠 成为第374244名黑鱼成员"
+                    if let Some(caps) = RE_FANS_NAME.captures(&raw_content) {
+                        caps[1].trim().to_string()
                     } else {
-                        cleaned
+                        "粉丝团成员".to_string()
                     }
+                };
+
+                // 提取粉丝团勋章名称（例如 "“黑鱼”" 或 "第374244名黑鱼成员"）
+                let badge_name = {
+                    if let Some(caps) = RE_FANS_BADGE.captures(&raw_content) {
+                        Some(caps[1].to_string())
+                    } else if let Some(caps) = RE_FANS_MEMBER.captures(&raw_content) {
+                        let name = caps[1].trim();
+                        if !name.is_empty() {
+                            Some(name.to_string())
+                        } else {
+                            Some("粉丝团".to_string())
+                        }
+                    } else {
+                        Some("粉丝团".to_string())
+                    }
+                };
+
+                // 礼物名称规范化为“粉丝团灯牌”或“粉丝团升级”，避免将整个通知长句当作礼物名
+                let gift_name = if raw_content.contains("升级") {
+                    "粉丝团升级".to_string()
+                } else {
+                    "粉丝团灯牌".to_string()
                 };
 
                 results.push(LiveMessage {
@@ -575,7 +600,7 @@ pub fn parse_douyin_messages(room_id: &str, response: &Response) -> Vec<LiveMess
                         user_id,
                         nickname,
                         avatar_url: None,
-                        badge_name: Some("粉丝团".to_string()),
+                        badge_name,
                         badge_level: Some(1),
                     },
                     payload: LiveMessagePayload::Gift {
@@ -888,13 +913,14 @@ mod tests {
 
     #[test]
     fn test_parse_douyin_fansclub_message() {
+        // 测试用户实际遇到的加团公屏通知："恭喜嗜眠成为第374244名黑鱼成员"
         let fans_msg = FansclubMessage {
             common: None,
             type_code: 1,
-            content: "恭喜 铁杆粉丝 加入粉丝团成为第88名“黑鱼”".to_string(),
+            content: "恭喜 嗜眠 成为第374244名黑鱼成员".to_string(),
             user: Some(User {
                 id: 123456,
-                nickname: "铁杆粉丝".to_string(),
+                nickname: "嗜眠".to_string(),
             }),
         };
 
@@ -916,7 +942,8 @@ mod tests {
         let parsed = parse_douyin_messages("214495728391", &response);
         assert_eq!(parsed.len(), 1);
         let msg = &parsed[0];
-        assert_eq!(msg.user.nickname, "铁杆粉丝");
+        assert_eq!(msg.user.nickname, "嗜眠");
+        assert_eq!(msg.user.badge_name, Some("黑鱼".to_string()));
         match &msg.payload {
             LiveMessagePayload::Gift {
                 gift_name,
@@ -924,9 +951,9 @@ mod tests {
                 price_cents,
                 ..
             } => {
-                assert_eq!(gift_name, "加入粉丝团");
+                assert_eq!(gift_name, "粉丝团灯牌");
                 assert_eq!(*count, 1);
-                assert_eq!(*price_cents, 10);
+                assert_eq!(*price_cents, 10); // 10分 = 1抖币 (0.1元)
             }
             _ => panic!("Expected Gift payload for fans club join message"),
         }
