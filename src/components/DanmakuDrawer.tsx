@@ -287,6 +287,8 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
             platform: room.platform,
           });
         }
+        // 按需激活后端 IPC 广播
+        await invoke("subscribe_danmaku", { roomId: room.room_id });
         setStatus("connected");
       } catch (err) {
         console.error("Failed to start danmaku preview:", err);
@@ -299,6 +301,8 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
     return () => {
       isMounted = false;
       if (unlistenFn) unlistenFn();
+      // 熔断后端 IPC 广播，释放系统 CPU 开销
+      invoke("unsubscribe_danmaku", { roomId: room.room_id }).catch(() => {});
       if (!isRecording) {
         invoke("stop_danmaku_preview", { roomId: room.room_id }).catch(() => {});
       }

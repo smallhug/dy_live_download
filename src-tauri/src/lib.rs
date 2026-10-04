@@ -6,7 +6,6 @@ pub mod danmaku;
 mod logger;
 mod monitor;
 mod parsers;
-mod proxy;
 mod recorder;
 mod telemetry;
 mod tray;
@@ -14,7 +13,6 @@ mod tray;
 use config::{load_config, AppConfigState};
 use danmaku::DanmakuManager;
 use log::{info, warn};
-use proxy::{start_stream_proxy, ProxyState};
 use recorder::RecorderState;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -60,12 +58,6 @@ pub fn run() {
             tray::handle_silent_start(&app_handle, initial_config.global.silent_start);
             tray::setup_tray(app).expect("Failed to setup system tray");
 
-            // 启动本地流媒体代理服务器
-            let proxy_port = tauri::async_runtime::block_on(async {
-                start_stream_proxy().await.expect("Failed to start stream proxy")
-            });
-            app.manage(ProxyState { port: proxy_port });
-
             monitor::start_monitor_loop(app_handle.clone());
             telemetry::start_telemetry_loop(app_handle);
             Ok(())
@@ -79,6 +71,7 @@ pub fn run() {
             commands::room::add_room,
             commands::room::delete_room,
             commands::room::update_room_config,
+            commands::room::open_in_external_player,
             // 录制控制
             commands::record::start_record_task,
             commands::record::stop_record_task,
@@ -92,11 +85,12 @@ pub fn run() {
             auth::validate_cookie,
             // 视频格式转换
             converter::convert_video,
-            // 弹幕预览与流代理
+            // 弹幕预览与按需订阅
             commands::danmaku::start_danmaku_preview,
             commands::danmaku::stop_danmaku_preview,
             commands::danmaku::is_danmaku_active,
-            commands::danmaku::get_stream_proxy_url
+            commands::danmaku::subscribe_danmaku,
+            commands::danmaku::unsubscribe_danmaku
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

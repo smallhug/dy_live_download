@@ -4,6 +4,7 @@ use crate::danmaku::model::LiveMessage;
 use crate::danmaku::writer::DanmakuFileWriter;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
@@ -13,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 
 pub struct DanmakuSession {
     pub cancel_token: CancellationToken,
+    pub subscribers: Arc<AtomicUsize>,
 }
 
 #[derive(Clone, Default)]
@@ -40,6 +42,27 @@ impl DanmakuManager {
         map.contains_key(room_id)
     }
 
+    // 前端打开弹幕抽屉时增加订阅计数
+    pub async fn subscribe(&self, room_id: &str) {
+        let map = self.sessions.lock().await;
+        if let Some(session) = map.get(room_id) {
+            session.subscribers.fetch_add(1, Ordering::SeqCst);
+            log::info!("[DanmakuManager] Subscribed to live-danmaku for room {}", room_id);
+        }
+    }
+
+    // 前端关闭弹幕抽屉时减少订阅计数
+    pub async fn unsubscribe(&self, room_id: &str) {
+        let map = self.sessions.lock().await;
+        if let Some(session) = map.get(room_id) {
+            let prev = session.subscribers.fetch_sub(1, Ordering::SeqCst);
+            if prev <= 1 {
+                session.subscribers.store(0, Ordering::SeqCst);
+            }
+            log::info!("[DanmakuManager] Unsubscribed from live-danmaku for room {}", room_id);
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn start_session(
         &self,
@@ -55,12 +78,15 @@ impl DanmakuManager {
         self.stop_session(&room_id).await;
 
         let cancel_token = CancellationToken::new();
+        let subscribers = Arc::new(AtomicUsize::new(if file_writer_opt.is_none() { 1 } else { 0 }));
+
         {
             let mut map = self.sessions.lock().await;
             map.insert(
                 room_id.clone(),
                 DanmakuSession {
                     cancel_token: cancel_token.clone(),
+                    subscribers: subscribers.clone(),
                 },
             );
         }
@@ -101,7 +127,7 @@ impl DanmakuManager {
         // Spawn event consumer & optional disk writer loop
         let consumer_cancel_token = cancel_token.clone();
         let consumer_room_id = room_id.clone();
-        let sessions_ref = self.sessions.clone();
+        let session_subscribers = subscribers.clone();
 
         tokio::spawn(async move {
             let mut writer: Option<(DanmakuFileWriter, u64)> = if let Some((path, format, start_time)) = file_writer_opt {
@@ -135,8 +161,10 @@ impl DanmakuManager {
                     maybe_msg = rx.recv() => {
                         match maybe_msg {
                             Some(msg) => {
-                                // 1. Emit live event to frontend
-                                let _ = app.emit("live-danmaku", &msg);
+                                // 1. 仅当有前端活跃订阅者时才通过 IPC 广播，防止后台录制时引发 IPC 事件风暴
+                                if session_subscribers.load(Ordering::Relaxed) > 0 {
+                                    let _ = app.emit("live-danmaku", &msg);
+                                }
 
                                 // 2. If recording to file, write to disk
                                 if let Some((w, start_time)) = &mut writer {
@@ -156,11 +184,6 @@ impl DanmakuManager {
                 let _ = w.finish();
                 log::info!("[DanmakuManager] Finished danmaku file writer for room {}", consumer_room_id);
             }
-
-            // Clean up session if it's still registered
-            let mut map = sessions_ref.lock().await;
-            map.remove(&consumer_room_id);
-            log::info!("[DanmakuManager] Session closed for room {}", consumer_room_id);
         });
     }
 }

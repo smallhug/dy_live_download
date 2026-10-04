@@ -34,7 +34,6 @@ export default defineConfig(async () => ({
       output: {
         manualChunks: {
           vendor: ["react", "react-dom"],
-          player: ["mpegts.js"],
         },
       },
     },

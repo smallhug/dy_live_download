@@ -2,7 +2,6 @@ use crate::auth::get_and_increment_cookie;
 use crate::config::AppConfigState;
 use crate::danmaku::DanmakuManager;
 use crate::parsers;
-use crate::proxy::ProxyState;
 use crate::HttpClientState;
 use log::info;
 use tauri::{AppHandle, State};
@@ -72,14 +71,22 @@ pub async fn is_danmaku_active(
     Ok(danmaku_manager.is_active(&room_id).await)
 }
 
-// 获取流媒体代理本地访问地址
+// 订阅前端实时弹幕事件（抽屉打开时激活）
 #[tauri::command]
-pub fn get_stream_proxy_url(
-    state: State<'_, ProxyState>,
-    stream_url: String,
-    platform: Option<String>,
-) -> String {
-    let platform_str = platform.unwrap_or_else(|| "douyin".to_string());
-    let encoded_url = url::form_urlencoded::byte_serialize(stream_url.as_bytes()).collect::<String>();
-    format!("http://127.0.0.1:{}/stream?url={}&platform={}", state.port, encoded_url, platform_str)
+pub async fn subscribe_danmaku(
+    danmaku_manager: State<'_, DanmakuManager>,
+    room_id: String,
+) -> Result<(), String> {
+    danmaku_manager.subscribe(&room_id).await;
+    Ok(())
+}
+
+// 取消订阅前端实时弹幕事件（抽屉关闭时熔断，节省 IPC 开销）
+#[tauri::command]
+pub async fn unsubscribe_danmaku(
+    danmaku_manager: State<'_, DanmakuManager>,
+    room_id: String,
+) -> Result<(), String> {
+    danmaku_manager.unsubscribe(&room_id).await;
+    Ok(())
 }

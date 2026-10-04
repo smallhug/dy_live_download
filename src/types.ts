@@ -20,6 +20,7 @@ export interface GlobalConfig {
   has_seen_guide: boolean;
   record_danmaku?: boolean;
   danmaku_format?: 'xml' | 'jsonl';
+  external_player_path?: string;
 }
 
 export interface RoomConfig {

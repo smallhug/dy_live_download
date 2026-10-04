@@ -25,6 +25,8 @@ pub struct GlobalConfig {
     pub record_danmaku: bool,
     #[serde(default = "default_danmaku_format")]
     pub danmaku_format: String,
+    #[serde(default)]
+    pub external_player_path: Option<String>,
 }
 
 fn default_danmaku_format() -> String {
@@ -90,6 +92,7 @@ impl Default for AppConfig {
                 has_seen_guide: false,
                 record_danmaku: true,
                 danmaku_format: "xml".to_string(),
+                external_player_path: None,
             },
             rooms: Vec::new(),
         }

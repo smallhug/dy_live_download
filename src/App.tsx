@@ -10,7 +10,6 @@ import CredentialsPage from "./pages/CredentialsPage";
 import ConverterPage from "./pages/ConverterPage";
 import SettingsPage from "./pages/SettingsPage";
 import { OnboardingGuide } from "./components/OnboardingGuide";
-import { LivePlayerModal } from "./components/LivePlayerModal";
 import { TelemetryBar } from "./components/TelemetryBar";
 import {
   RefreshIcon,
@@ -39,7 +38,6 @@ function App() {
   const [isAddRoomOpen, setIsAddRoomOpen] = useState(false);
   const [isRoomSettingsOpen, setIsRoomSettingsOpen] = useState(false);
   const [selectedRoomForSettings, setSelectedRoomForSettings] = useState<RoomConfig | null>(null);
-  const [playbackRoom, setPlaybackRoom] = useState<RoomConfig | null>(null);
 
   // ── 自定义对话框状态 ──────────────────────────────────────────
   const [dialogState, setDialogState] = useState<(DialogOptions & { resolve: (v: boolean) => void }) | null>(null);
@@ -282,6 +280,7 @@ function App() {
         has_seen_guide: currentConfig.global.has_seen_guide,
         record_danmaku: currentConfig.global.record_danmaku ?? true,
         danmaku_format: currentConfig.global.danmaku_format || 'xml',
+        external_player_path: currentConfig.global.external_player_path,
         ...patch
       };
       await invoke("update_global_config", {
@@ -297,12 +296,26 @@ function App() {
         hasSeenGuide: fullConfig.has_seen_guide,
         recordDanmaku: fullConfig.record_danmaku,
         danmakuFormat: fullConfig.danmaku_format,
+        externalPlayerPath: fullConfig.external_player_path,
       });
       await fetchConfig();
     } catch (err) {
       alertAsync("更新全局配置失败: " + err, "错误", "error");
     }
   }, [fetchConfig, alertAsync]);
+
+  // ── 调用外部播放器预览 ──────────────────────────────────────────
+  const handleWatchLive = useCallback(async (room: RoomConfig) => {
+    try {
+      const streamUrl = await invoke<string>("open_in_external_player", { roomId: room.room_id });
+      if (streamUrl) {
+        await alertAsync(`已调用外部播放器打开直播流！\n\n流地址: ${streamUrl.slice(0, 70)}...`, "外部播放器预览", "info");
+      }
+    } catch (err: any) {
+      const errorMsg = err?.message || err?.toString() || "未知错误";
+      await alertAsync(`调用外部播放器失败: ${errorMsg}\n\n建议在【系统设置】中指定 PotPlayer 或 mpv 的可执行文件完整路径。`, "播放提示", "warning");
+    }
+  }, [alertAsync]);
 
   // ── 过滤搜索主播卡片 ────────────────────────────────────────────
   const filteredRooms = useMemo(() => {
@@ -412,7 +425,7 @@ function App() {
               onStopRecord={handleStopRecord}
               onDeleteRoom={handleDeleteRoom}
               onOpenSettings={(room) => { setSelectedRoomForSettings(room); setIsRoomSettingsOpen(true); }}
-              onWatchLive={(room) => setPlaybackRoom(room)}
+              onWatchLive={handleWatchLive}
             />
           )}
 
@@ -446,16 +459,6 @@ function App() {
           activeRecordCount={activeTasks.length}
         />
       </div>
-
-      {/* 5. 原有的主播与卡片设置弹出 modal 层（依然维持高阶 Modal 的精致弹出） */}
-      {playbackRoom && (
-        <LivePlayerModal
-          room={playbackRoom}
-          isOpen={!!playbackRoom}
-          isRecording={activeTasks.includes(playbackRoom.room_id)}
-          onClose={() => setPlaybackRoom(null)}
-        />
-      )}
 
       {isAddRoomOpen && (
         <AddRoomModal

@@ -23,6 +23,7 @@ pub fn update_global_config(
     has_seen_guide: bool,
     record_danmaku: Option<bool>,
     danmaku_format: Option<String>,
+    external_player_path: Option<String>,
 ) -> Result<(), String> {
     let mut config = state.0.write().unwrap();
     config.global.ffmpeg_path = ffmpeg_path;
@@ -41,6 +42,7 @@ pub fn update_global_config(
     if let Some(df) = danmaku_format {
         config.global.danmaku_format = df;
     }
+    config.global.external_player_path = external_player_path;
     save_config(&app, &config)?;
 
     // 联动更新系统开机自启动设置

@@ -14,6 +14,7 @@ interface SettingsPageProps {
     close_to_tray: boolean;
     record_danmaku?: boolean;
     danmaku_format?: 'xml' | 'jsonl';
+    external_player_path?: string;
   }) => Promise<void>;
   showAlert: (message: string, title?: string, kind?: "info" | "error" | "warning") => Promise<boolean>;
 }
@@ -26,6 +27,7 @@ export default function SettingsPage({ config, onSave, showAlert }: SettingsPage
   const [closeToTray, setCloseToTray] = useState(false);
   const [recordDanmaku, setRecordDanmaku] = useState(true);
   const [danmakuFormat, setDanmakuFormat] = useState<'xml' | 'jsonl'>('xml');
+  const [externalPlayerPath, setExternalPlayerPath] = useState("");
   const [isSavingSettings, setIsSavingSettings] = useState(false);
 
   useEffect(() => {
@@ -37,6 +39,7 @@ export default function SettingsPage({ config, onSave, showAlert }: SettingsPage
       setCloseToTray(!!config.global.close_to_tray);
       setRecordDanmaku(config.global.record_danmaku ?? true);
       setDanmakuFormat((config.global.danmaku_format as 'xml' | 'jsonl') || 'xml');
+      setExternalPlayerPath(config.global.external_player_path || "");
     }
   }, [config]);
 
@@ -52,6 +55,20 @@ export default function SettingsPage({ config, onSave, showAlert }: SettingsPage
       }
     } catch (err) {
       console.error("选择保存目录失败:", err);
+    }
+  };
+
+  const handleBrowseExternalPlayer = async () => {
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        filters: [{ name: "可执行程序", extensions: ["exe", "cmd", "bat"] }],
+      });
+      if (selected && typeof selected === "string") {
+        setExternalPlayerPath(selected);
+      }
+    } catch (err) {
+      console.error("选择外部播放器失败:", err);
     }
   };
 
@@ -75,6 +92,7 @@ export default function SettingsPage({ config, onSave, showAlert }: SettingsPage
         close_to_tray: closeToTray,
         record_danmaku: recordDanmaku,
         danmaku_format: danmakuFormat,
+        external_player_path: externalPlayerPath || undefined,
       });
       await showAlert("设置保存成功并已立即生效！", "系统设置", "info");
     } catch (err) {
@@ -260,6 +278,35 @@ export default function SettingsPage({ config, onSave, showAlert }: SettingsPage
                 <option value="xml">XML (播放器外挂弹幕)</option>
                 <option value="jsonl">JSONL (结构化日志)</option>
               </select>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", paddingTop: "12px", borderTop: "1px solid #f1f5f9" }}>
+            <div style={{ flex: 1, paddingRight: "32px" }}>
+              <label htmlFor="externalPlayerInput" style={{ fontSize: "13px", fontWeight: "500", color: "#1e293b", cursor: "pointer" }}>
+                外部专业播放器路径 (可选)
+              </label>
+              <p style={{ fontSize: "11px", color: "#94a3b8", marginTop: "4px", margin: 0, lineHeight: "1.4" }}>
+                支持配置 PotPlayerMini64.exe、mpv.exe、vlc.exe 等路径。留空时将自动尝试调用系统安装的常见播放器；点击卡片播放图标即可零卡顿专业硬件解码预览。
+              </p>
+            </div>
+            <div style={{ width: "400px", display: "flex", gap: "8px" }}>
+              <input
+                id="externalPlayerInput"
+                type="text"
+                value={externalPlayerPath}
+                onChange={(e) => setExternalPlayerPath(e.target.value)}
+                placeholder="例如: C:\Program Files\DAUM\PotPlayer\PotPlayerMini64.exe"
+                style={{ flex: 1, fontSize: "13px", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1" }}
+              />
+              <button
+                type="button"
+                onClick={handleBrowseExternalPlayer}
+                className="btn btn-secondary"
+                style={{ padding: "8px 12px", borderRadius: "6px", fontSize: "12.5px", whiteSpace: "nowrap" }}
+              >
+                选择程序
+              </button>
             </div>
           </div>
         </div>

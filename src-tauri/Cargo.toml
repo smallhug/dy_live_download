@@ -42,6 +42,4 @@ bytes = "1.7"
 tokio-util = "0.7"
 futures-util = "0.3"
 byteorder = "1.5"
-axum = "0.7"
-tower-http = { version = "0.5", features = ["cors"] }
 

@@ -94,7 +94,7 @@ export const RoomCard: React.FC<RoomCardProps> = React.memo(({
             className={`icon-btn ${isLive ? "watch-live-active" : ""}`}
             onClick={onWatchLive}
             disabled={!isLive}
-            title={isLive ? "观看直播与弹幕" : "主播未开播，无法观看"}
+            title={isLive ? "调用外部播放器预览 (PotPlayer/mpv/VLC)" : "主播未开播，无法播放"}
             style={{
               width: "30px",
               height: "30px",
